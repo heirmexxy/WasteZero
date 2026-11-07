@@ -1,128 +1,177 @@
-# WasteZero
-### Make AI application spending visible. Reduce waste without sacrificing quality.
+# WasteZero 0.4.0
+### Lower your customers' AI model bills. Get paid a share of the savings you can prove.
 
-WasteZero is an observe-first cost visibility and optimization layer for applications that call language-model APIs. It sits between your application and an OpenAI-compatible chat-completions endpoint, records usage metadata, estimates spend using rates you configure, and surfaces opportunities for review.
+WasteZero is a proxy that sits between a customer's app and their model provider (any OpenAI-compatible chat-completions API). It records every call, finds waste, fixes it within limits the customer has agreed to, measures the saving on each request, and bills a percentage of verified savings to a saved card. An autonomous operator runs the loop and hands decisions to a human only where it should. It can also find new customers, email them, and sign them up.
 
-**Product promise:** understand where inference money goes, identify avoidable spend, test safer alternatives, and only claim savings after independently verifying them.
+```
+find customers → sign up (observe-only) → measure spend → find waste → test the fix on real traffic
+      → go live if quality holds → watch quality, roll back if it slips → invoice % of savings → charge card
+```
 
-## What this release does
+## What it does
 
-- OpenAI-compatible `POST /v1/chat/completions` proxy.
-- Client API-key authentication using `Authorization: Bearer ...`.
-- Request-size limits, upstream timeout, JSON validation and upstream error handling.
-- Usage capture from provider responses (`prompt_tokens`, `completion_tokens`, `total_tokens`).
-- Configurable per-million-token cost rates.
-- Persistent local JSONL event storage.
-- Authenticated `GET /admin/summary` reporting calls, tokens and estimated cost by model.
-- Authenticated `GET /admin/events` for recent metadata-only events.
-- Conservative, observe-only policy recommendations. It does **not** silently change models or prompts.
-- Tests using Node's built-in test runner; no runtime dependencies.
+| Area | What happens |
+|---|---|
+| **Proxy** | OpenAI-compatible `POST /v1/chat/completions`, streaming and non-streaming. Provider request-ID and rate-limit headers pass through. Each customer can use their own provider key (`X-Upstream-Authorization`), so the provider bills them directly. |
+| **Measurement** | Every call is recorded with tokens, cost (including the discounted rate for cached prompt tokens), the cost it would have had without WasteZero, and the saving. Prompts and answers are **not** stored. `X-WasteZero-Tag` breaks spend down by feature. |
+| **Savings levers** | **Reuse:** identical repeat requests (temperature 0) are answered from memory at zero cost. **Routing:** an expensive model doing short tasks is switched to a cheaper one. |
+| **Quality checks** | Before routing goes live, a sample of real requests also goes to the cheaper model, and a grader model judges whether its answer could replace the original. Tool calls must match exactly. Once live, a smaller sample keeps being re-checked. If quality drops below the customer's threshold, the operator rolls the change back. |
+| **Operator** | Runs on a timer. Finds waste, files proposals, starts tests, promotes, rejects or rolls back changes, drafts invoices, collects payment and finds customers. Every decision goes to the audit log. Decisions that need a human go to a webhook (for example Slack). A kill switch stops it. |
+| **Billing** | Monthly invoice = savings share (% of verified savings) + an optional fixed monthly subscription fee. It is emailed to the customer and charged to their saved card through **Stripe** or **Paystack**. Signed webhooks mark invoices paid or failed, and failed charges are retried. |
+| **Finding customers** | Finds companies that have recently launched AI products, reads their public site, and keeps only role addresses on their own domain (hello@, sales@…). A model judges fit and writes a personal line, and a template email goes out with your postal address and one-click unsubscribe. One follow-up, a daily cap, and approval first by default. |
+| **Self-serve signup** | `GET /signup` creates an observe-only account and shows the API key once. It sends a welcome email and a card link, and links each signup back to the outreach email that brought it in. |
 
 ## Quick start
 
-Requirements: Node.js 20 or later.
+Requires Node.js 20.6 or later. There are no dependencies to install.
 
 1. Copy `.env.example` to `.env`.
-2. Set `WASTEZERO_API_KEY` to a long random secret.
-3. Set `OPENAI_API_KEY` to your provider key.
-4. Review and update `MODEL_RATES_JSON` using current provider pricing.
-5. Run:
+2. Set `WASTEZERO_ADMIN_KEY` (24+ random characters), `OPENAI_API_KEY`, and check `MODEL_RATES_JSON` against current provider prices.
+3. Run the tests and start the server:
+   ```bash
+   npm test
+   npm start
+   ```
+4. Create a customer. Every customer starts observe-only.
+   ```bash
+   curl -X POST localhost:8787/admin/tenants -H "Authorization: Bearer $WASTEZERO_ADMIN_KEY" \
+     -H "content-type: application/json" -d '{"name":"Acme","email":"billing@acme.com"}'
+   ```
+   The response contains the customer's `apiKey`. It is shown once.
+5. The customer changes one line in their app:
+   ```python
+   client = OpenAI(base_url="https://your-wastezero-host/v1", api_key="wz_...",
+                   default_headers={"X-Upstream-Authorization": "Bearer sk-their-openai-key",
+                                    "X-WasteZero-Tag": "support-bot"})
+   ```
 
-```bash
-npm run check
-npm test
-npm start
+## Customer consent (the policy)
+
+Each customer has a policy. Nothing is optimised unless the policy allows it, and the customer agrees to it in their contract.
+
+```json
+{
+  "allowedOptimizations": ["cache", "route"],
+  "autoShadow": true,          // operator may start quality tests on its own
+  "autoPromote": true,         // operator may switch live traffic once tests pass
+  "minQuality": 0.95,          // share of tested answers that must be acceptable
+  "minSamples": 30,
+  "shadowSampleRate": 0.1,     // share of matching requests duplicated for testing (WasteZero pays)
+  "auditSampleRate": 0.02,     // share of live optimised requests re-checked
+  "maxEvalSpendUsdPerMonth": 20,
+  "revenueSharePct": 20,
+  "monthlyBaseFeeUsd": 0,
+  "cacheTtlSec": 3600,
+  "cacheNondeterministic": false
+}
 ```
+Change it with `PATCH /admin/tenants/:id {"policy": {...}}`. If a customer withdraws consent, their live rules are paused on the next operator run.
 
-The proxy listens on `http://localhost:8787` by default.
+With `autoShadow` and `autoPromote` both off, the operator still finds waste and runs nothing on its own: it escalates each step for approval (`POST /admin/rules/:id/transition {"to":"shadow"}`).
 
-## Point your application at WasteZero
+## How savings are measured (put this in the contract)
 
-Change the OpenAI base URL in your application to `http://localhost:8787/v1` and use the `WASTEZERO_API_KEY` as the API key for the proxy. WasteZero uses its own `OPENAI_API_KEY` when forwarding to the provider.
+For each successful request that WasteZero changed:
 
-Example:
+- **Reused answer:** saving = what the request would have cost at the model the customer asked for. Actual cost = 0.
+- **Routed request:** saving = the cost of the tokens at the requested model minus the cost at the model actually used. Both sides use the cheaper model's token counts, because the original model was never called. Tokenisers differ slightly between models.
+- Losses net against gains. The fee is never below zero. Unpriced models are excluded and listed on the invoice.
 
-```bash
-curl http://localhost:8787/v1/chat/completions \
-  -H "Authorization: Bearer $WASTEZERO_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role":"user","content":"Summarise this sentence."}]
-  }'
-```
+Before an invoice is charged, `POST /admin/reconcile {"tenantId","period","providerBilledUsd"}` compares recorded spend with the provider's bill. Inside `RECONCILE_TOLERANCE_PCT` the invoice becomes `ready`; outside it, `needs_review`. Set `BILLING_REQUIRE_RECONCILIATION=false` to send and charge invoices without this check.
 
-## Admin reporting
+## Card billing
 
-```bash
-curl http://localhost:8787/admin/summary \
-  -H "Authorization: Bearer $WASTEZERO_API_KEY"
-```
+1. Set `PAYMENT_PROVIDER=stripe` (with `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`) or `paystack` (with `PAYSTACK_SECRET_KEY`), plus `PUBLIC_BASE_URL`.
+2. Point the provider's webhook at `<PUBLIC_BASE_URL>/webhooks/payments`.
+   - **Stripe events:** `checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`.
+   - **Paystack:** set the webhook URL in the dashboard.
+3. Customers save a card from the link in their welcome email or invoice, or from `POST /admin/tenants/:id/card-link`.
+   - **Stripe:** hosted Checkout in setup mode.
+   - **Paystack:** a small first charge that is refunded automatically.
+4. Each month the operator emails the invoice and charges the card. A declined card is retried every `BILLING_RETRY_HOURS`, up to `BILLING_MAX_ATTEMPTS` times, and then escalated.
 
-```bash
-curl "http://localhost:8787/admin/events?limit=20" \
-  -H "Authorization: Bearer $WASTEZERO_API_KEY"
-```
+Safeguards:
+- Stripe calls use idempotency keys.
+- An invoice that was interrupted mid-charge is never retried automatically.
+- A paid invoice cannot be reissued.
 
-## Data and privacy
+Fees are worked out in USD. To charge in another currency, set `BILLING_CURRENCY` and `BILLING_FX_RATE`, for example `ngn` and `1600` on Paystack.
 
-WasteZero stores only operational metadata by default: timestamp, model, token counts, estimated cost, status and latency. It does not persist prompts, completions, authorization headers, or provider API keys. The proxy must still receive prompt content transiently to forward the request to the model provider.
+## Finding customers
 
-Local event data is written to `DATA_DIR/events.jsonl`. Protect the host and its backups. This MVP has no encryption-at-rest, tenant isolation, retention scheduler, or external database.
+Set `PROSPECTING_ENABLED=true`, `PUBLIC_BASE_URL`, `SENDER_ADDRESS` (your postal address; nothing is sent without it), and an email provider (`EMAIL_PROVIDER=resend` with `RESEND_API_KEY` and `EMAIL_FROM` on a domain you have verified with Resend).
 
-## How cost estimates work
+- **Sources:** Hacker News "Show HN" launches matching `PROSPECT_QUERIES`, plus any domains you import with `POST /admin/prospects {"domains":[...]}`.
+- **Review:** `GET /admin/prospects?state=drafted`, and `GET /admin/prospects/:id` to see the exact email.
+- **Approve:** `POST /admin/prospects/approve-all`, or approve or reject one at a time. Set `OUTREACH_AUTO_SEND=true` to skip approval.
+- **Built-in limits:** only public pages are read, robots.txt is honoured, private network addresses are refused, only role addresses are contacted, and there are at most 2 emails per company. Unsubscribes and existing customers are never contacted.
 
-For each model, `MODEL_RATES_JSON` contains USD cost per one million input and output tokens. WasteZero estimates:
+Anti-spam rules for cold email differ by country (for example, CAN-SPAM in the US, GDPR/PECR in the UK and EU, and the NDPA in Nigeria). Check which apply to the markets you email.
 
-`(input_tokens × input_rate + output_tokens × output_rate) / 1,000,000`
+## Running the operator
 
-The estimate is not an invoice. Provider pricing, cached-token pricing, tool charges, discounts, taxes, and other billing rules may differ. Confirm against your provider bill.
-
-## Optimization workflow
-
-1. Observe actual usage and spend.
-2. Identify expensive or unusually repetitive usage.
-3. Form a candidate change (for example, a smaller model for a narrow task).
-4. Evaluate candidate output quality on representative test cases.
-5. Obtain explicit customer approval before rollout.
-6. Compare like-for-like usage and quality after rollout.
-7. Claim savings only when the baseline, measurement window, quality guardrails and calculation are documented.
-
-This release only provides the first two steps plus conservative recommendations. It does not execute optimization changes or certify savings.
+- `OPERATOR_INTERVAL_MS=3600000` runs it hourly inside the server.
+- `POST /admin/operator/run` runs it once and returns what it did.
+- `POST /admin/operator/kill` and `/resume` set and clear the kill switch. Live rules keep running; pause them individually.
+- `ESCALATION_WEBHOOK_URL` receives decisions that need a human: consent, approvals, rollbacks, unpaid invoices, signups and outreach waiting for approval.
 
 ## API
 
-- `GET /health` — health check.
-- `POST /v1/chat/completions` — forwards chat-completions requests.
-- `GET /admin/summary` — aggregate usage and estimated cost.
-- `GET /admin/events?limit=50` — recent metadata events.
+**Customer** (customer key):
+- `POST /v1/chat/completions`
+- `GET /v1/wastezero/summary`: their spend, savings and rules
 
-All routes except `/health` require the WasteZero bearer key. The proxy currently supports non-streaming JSON requests only. Streaming, embeddings, audio, images, batch APIs and other endpoints are not implemented.
+**Public:**
+- `GET /health`
+- `GET|POST /signup`
+- `GET /billing/setup?token=`
+- `GET|POST /unsubscribe?token=`
+- `POST /webhooks/payments`
 
-## Naïve / Vetta integration
+**Admin** (`WASTEZERO_ADMIN_KEY`):
 
-The `skills/` directory contains initial agent operating instructions. They are framework-neutral and do not establish permissions. A Naïve/Vetta adapter is intentionally not enabled in this release: configure it only against the current official SDK/API documentation, then enforce credentials, budgets, approvals, audit logs and a kill switch outside the skill text.
+| Area | Endpoints |
+|---|---|
+| Customers | `GET/POST /admin/tenants`, `PATCH /admin/tenants/:id`, `POST /admin/tenants/:id/rotate-key`, `POST /admin/tenants/:id/card-link` |
+| Reporting | `GET /admin/summary?tenant=&from=&to=`, `GET /admin/events?tenant=&limit=`, `GET /admin/analysis?tenant=` |
+| Rules | `GET/POST /admin/rules`, `POST /admin/rules/:id/transition {"to","reason"}` |
+| Operator | `POST /admin/operator/run`, `GET /admin/operator/status`, `POST /admin/operator/kill`, `POST /admin/operator/resume`, `GET /admin/audit` |
+| Billing | `GET /admin/invoices?tenant=&period=YYYY-MM[&format=html]`, `POST /admin/reconcile`, `POST /admin/billing/collect`, `POST /admin/invoices/:id/status` |
+| Prospects | `GET/POST /admin/prospects`, `GET /admin/prospects/:id`, `POST /admin/prospects/:id/approve` and `/reject`, `POST /admin/prospects/approve-all`, `POST /admin/prospects/suppress`, `POST /admin/prospecting/run` |
 
-## Production-readiness gaps
+## Data and privacy
 
-Do not expose this MVP directly to the public internet or use it as a production billing authority. Before production, add:
-- durable database, migrations, tenant isolation and access roles;
-- secret management, TLS/reverse proxy, rate limiting and abuse controls;
-- streaming support and provider-specific endpoint coverage;
-- robust pricing catalogue, cached-token and tool-cost accounting;
-- retention controls, encryption at rest, backups and observability;
-- evaluation harness, quality guardrails, approval workflow and rollback;
-- independent savings verification and billing reconciliation.
+- Prompts and answers are not written to disk. The answer-reuse store lives in memory, only for customers who allow it.
+- Quality tests send a sample of requests to a second model and to a grader. Customers consent to this when they allow `route`. Only scores are kept.
+- Request fingerprints are one-way hashes.
+- Customer API keys are stored as SHA-256 hashes. Card references never appear in the admin API.
+- All data lives in `DATA_DIR` as JSON and JSONL files with mode 0600. Protect the host and its backups.
 
-## Repository layout
+## Before taking real customers
 
-```text
-src/       proxy, auth, cost calculation, policy and persistence
-test/      automated tests
-skills/    initial agent instructions
-docs/      product and architecture notes
+This release has been tested end to end against mock providers (29 tests). It has **not** been run against live Stripe, Paystack, Resend or OpenAI accounts. Run each one in test mode first.
+
+Still to do before scale:
+- Put HTTPS and a reverse proxy in front.
+- Move from files to a database, and run a single instance until then: answer reuse and rule files are per process.
+- Add more providers (Anthropic, Gemini) and endpoints (embeddings, Responses API).
+- Have a lawyer review the savings-share contract and the outreach practice for each market.
+
+## Layout
+
+```
+src/app.js          HTTP routes, proxy, admin API
+src/optimizer.js    which rule applies to a request
+src/evaluator.js    quality tests and grader
+src/analyzer.js     waste detection
+src/operator.js     autonomous loop and escalation
+src/billing.js      invoices and reconciliation
+src/collections.js  invoice emails and card charging
+src/payments.js     Stripe and Paystack adapters
+src/prospecting.js  finding customers and outreach
+src/public.js       signup, card setup, unsubscribe, webhooks
+test/               unit and integration tests with mock providers
+scripts/            tenant CLI, one-off operator run
 ```
 
-## License
-
-Proprietary — all rights reserved, unless a separate written licence says otherwise.
+Proprietary. All rights reserved, unless a separate written licence says otherwise.

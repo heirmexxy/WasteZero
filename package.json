@@ -1,14 +1,16 @@
 {
   "name": "wastezero",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "An observe-first AI inference cost visibility and optimization proxy.",
+  "description": "Cuts AI inference spend by reusing repeated answers and routing simple work to cheaper models, proves quality, and bills a share of verified savings.",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --test",
-    "check": "node --check src/server.js && node --check src/costs.js && node --check src/store.js && node --check src/policy.js"
+    "start": "node --env-file=.env src/server.js",
+    "dev": "node --env-file=.env --watch src/server.js",
+    "operate": "node --env-file=.env scripts/operate.js",
+    "tenant": "node --env-file=.env scripts/tenant.js",
+    "test": "node --test test/*.test.js",
+    "check": "for f in src/*.js scripts/*.js; do node --check \"$f\" || exit 1; done"
   },
-  "engines": { "node": ">=20" }
+  "engines": { "node": ">=20.6" }
 }

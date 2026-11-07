@@ -1,21 +1,34 @@
 # Roadmap
 
-## Release 0.3 — observe-first MVP
-- [x] Non-streaming chat-completions proxy
-- [x] Bearer authentication
-- [x] Metadata-only local event persistence
-- [x] Configurable model cost estimates
-- [x] Summary and event endpoints
-- [x] Observe-only recommendations
-- [x] Unit tests
+## 0.4.0 — the full loop (this release)
+- [x] v0.3 fixes:
+  - `.env` loading
+  - dated model pricing
+  - crash safety
+  - clean 413
+  - config validation
+  - separate admin key
+- [x] Multiple customers with consent policies; bring-your-own provider key; per-feature tags
+- [x] Streaming support with usage accounting
+- [x] Answer reuse and cheaper-model routing
+- [x] Shadow testing, LLM grader, live audits, automatic rollback
+- [x] Per-request savings record, invoices, reconciliation against the provider bill
+- [x] Card billing through Stripe or Paystack, with webhooks and retries
+- [x] Finding customers and outreach, with guardrails; self-serve signup
+- [x] Autonomous operator, audit log, escalation webhook, kill switch
+- [x] 29 tests against mock providers
 
-## Next engineering milestones
-1. Add integration tests with a mock upstream HTTP server.
-2. Add streaming support with safe usage accounting.
-3. Separate admin and proxy credentials; add rate limits and request IDs.
-4. Add SQLite/PostgreSQL persistence, migrations and tenant boundaries.
-5. Add provider pricing catalogue with effective dates and cached-token pricing.
-6. Build an evaluation harness and human approval workflow.
-7. Add verified savings ledger and customer-facing dashboard.
-8. Integrate Naïve/Vetta using the current supported SDK and explicit permissions.
-9. Add deployment packaging, TLS, secret management, retention and monitoring.
+## Next
+1. Trial runs against live Stripe/Paystack test mode, Resend, and OpenAI, using a real pilot customer.
+2. Pull provider bills automatically (OpenAI and Anthropic usage/cost APIs) so reconciliation needs no human.
+3. Postgres storage and a shared cache (Redis), so more than one instance can run.
+4. More providers and endpoints: Anthropic Messages, Gemini, embeddings, the Responses API, batch.
+5. More savings levers:
+   - provider prompt-caching layout
+   - batch API for work that isn't urgent
+   - output-length caps
+   - retry-loop breaker
+   - near-duplicate (semantic) reuse with quality testing
+6. Customer dashboard (savings over time, rules, invoices, card).
+7. Inbox handling for replies to outreach; CRM export.
+8. Security review, data processing agreement, SOC 2 groundwork.
