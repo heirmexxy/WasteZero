@@ -1,0 +1,14 @@
+{
+  "name": "wastezero",
+  "version": "0.3.0",
+  "private": true,
+  "description": "An observe-first AI inference cost visibility and optimization proxy.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "check": "node --check src/server.js && node --check src/costs.js && node --check src/store.js && node --check src/policy.js"
+  },
+  "engines": { "node": ">=20" }
+}
