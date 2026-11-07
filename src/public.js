@@ -1,7 +1,7 @@
 import { signToken, verifyToken, link } from "./tokens.js";
 import { applyPaymentEvent, cardSetupUrl } from "./collections.js";
 import { note } from "./operator.js";
-import { escapeHtml } from "./util.js";
+import { escapeHtml, clientIp } from "./util.js";
 
 // Public pages: self-serve signup, card setup, unsubscribe, payment webhooks. No bearer key here.
 
@@ -61,7 +61,7 @@ export async function handlePublic(ctx, req, res, url) {
     const raw = await readRaw(req, 16384);
     const form = req.headers["content-type"]?.includes("json") ? JSON.parse(raw || "{}") : Object.fromEntries(new URLSearchParams(raw));
     if (form.company_url) return sendPage(res, 200, "Thanks", "<p>Thanks.</p>");   // honeypot
-    if (rateLimited(req.socket.remoteAddress || "unknown")) return sendPage(res, 429, "Slow down", "<p>Too many signups from this address. Try again later.</p>");
+    if (rateLimited(clientIp(req, config))) return sendPage(res, 429, "Slow down", "<p>Too many signups from this address. Try again later.</p>");
     if (ctx.tenants.findByEmail(form.email)) return sendPage(res, 409, "Sign up · WasteZero", signupForm(form.ref || "", "An account already exists for this email. Contact us to recover the key."));
     let created;
     try { created = await ctx.tenants.create({ name: form.name, email: form.email || "", website: form.website || "", source: "signup" }); }
@@ -105,7 +105,21 @@ ${setup ? `<a class="btn" href="${escapeHtml(setup)}">Add a card for billing</a>
       return sendPage(res, 502, "Try again", "<p>We couldn't reach the payment provider. Please try again in a minute.</p>");
     }
   }
-  if (p === "/billing/done") return sendPage(res, 200, "Card saved", "<h1>Thank you</h1><p>Your card is being saved. Invoices will be charged to it automatically.</p>");
+  if (p === "/billing/done") {
+    const reference = url.searchParams.get("reference") || url.searchParams.get("trxref");
+    if (reference && ctx.payments.verifySetup) {
+      try {
+        const event = await ctx.payments.verifySetup(reference);
+        if (event) {
+          const tenant = ctx.tenants.get(event.tenantId);
+          if (tenant?.billing?.status !== "card_on_file") await applyPaymentEvent(ctx, event);
+          return sendPage(res, 200, "Card saved", `<h1>Card saved</h1><p>Your ${escapeHtml(event.billing.cardBrand || "card")} ending ${escapeHtml(event.billing.cardLast4 || "")} is saved. The small setup charge is being refunded. Invoices will be charged automatically.</p>`);
+        }
+      } catch (error) { ctx.log.error("card setup check failed:", error.message); }
+      return sendPage(res, 200, "Not confirmed", "<p>We couldn't confirm the card yet. If you were charged, it will be refunded; please try the link again.</p>");
+    }
+    return sendPage(res, 200, "Card saved", "<h1>Thank you</h1><p>Your card is being saved. Invoices will be charged to it automatically.</p>");
+  }
   if (p === "/billing/cancelled") return sendPage(res, 200, "Cancelled", "<p>No card was saved. You can use the link in your email again at any time.</p>");
 
   if (p === "/unsubscribe") {

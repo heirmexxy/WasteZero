@@ -48,6 +48,26 @@ export function previousPeriod(date = new Date()) {
 }
 export const isPeriod = (p) => typeof p === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(p);
 
+/** The visitor's address. Behind Caddy/nginx (TRUST_PROXY=true) it comes from X-Forwarded-For. */
+export function clientIp(req, config) {
+  if (config?.trustProxy) {
+    const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    if (fwd) return fwd;
+  }
+  return req.socket?.remoteAddress || "unknown";
+}
+
+/**
+ * Combine savings findings that may overlap, so the same dollar is never counted twice.
+ * Each finding is treated as a share of total spend applied one after another:
+ * total = spend × (1 − Π(1 − finding/spend)). Always below spend.
+ */
+export function combineSavings(spend, amounts) {
+  if (!(spend > 0)) return 0;
+  const remaining = amounts.reduce((left, a) => left * (1 - Math.min(Math.max(a, 0), spend) / spend), 1);
+  return spend * (1 - remaining);
+}
+
 export function httpError(status, message) {
   return Object.assign(new Error(message), { status });
 }

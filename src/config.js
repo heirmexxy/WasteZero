@@ -40,11 +40,13 @@ export function loadConfig(env = process.env) {
   const modelRates = validateRates(json(env, "MODEL_RATES_JSON", {}));
   const config = {
     host: env.HOST || "127.0.0.1",
+    trustProxy: env.TRUST_PROXY === "true",
     port: number(env, "PORT", 8787, { min: 1, max: 65535 }),
     adminKey: env.WASTEZERO_ADMIN_KEY || "",
     bootstrapTenantKey: env.WASTEZERO_API_KEY || "",
     upstreamKey: env.OPENAI_API_KEY || "",
     upstreamBaseUrl: (env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, ""),
+    openaiAdminBaseUrl: (env.OPENAI_ADMIN_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, ""),
     timeoutMs: number(env, "REQUEST_TIMEOUT_MS", 45000, { min: 1000 }),
     maxBodyBytes: number(env, "MAX_BODY_BYTES", 1048576, { min: 1024 }),
     dataDir: env.DATA_DIR || "./data",

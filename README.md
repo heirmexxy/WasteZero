@@ -1,5 +1,5 @@
-# WasteZero 0.4.0
-### Lower your customers' AI model bills. Get paid a share of the savings you can prove.
+# WasteZero 0.5.0
+### Find where your AI money leaks. Fix it without hurting quality. Pay only from what we save.
 
 WasteZero is a proxy that sits between a customer's app and their model provider (any OpenAI-compatible chat-completions API). It records every call, finds waste, fixes it within limits the customer has agreed to, measures the saving on each request, and bills a percentage of verified savings to a saved card. An autonomous operator runs the loop and hands decisions to a human only where it should. It can also find new customers, email them, and sign them up.
 
@@ -7,6 +7,25 @@ WasteZero is a proxy that sits between a customer's app and their model provider
 find customers → sign up (observe-only) → measure spend → find waste → test the fix on real traffic
       → go live if quality holds → watch quality, roll back if it slips → invoice % of savings → charge card
 ```
+
+## New in 0.5.0
+- **Free audit, no proxy needed** (`/audit`). The customer uploads a usage export or connects an OpenAI admin key (read once, never stored) and gets waste in dollars per month: model mix, unused prompt caching, batch candidates and spending spikes. Each finding is labelled *measured* or *estimated*, with its assumption stated.
+- **Runaway-spend protection.**
+  - Budget caps per customer (daily or monthly), per feature and per end user.
+  - A loop breaker for identical requests repeated in a short window.
+  - Spike alerts against the customer's normal hourly spend.
+  - Each one alerts or blocks/pauses, as the customer chooses. Alerts go by email and to a Slack-style webhook.
+- **Waste report on proxied traffic** (`GET /v1/wastezero/waste-report`). Covers loops, repeats, model mix, prompt caching, truncated answers, background work and spikes.
+- **Customer self-service.** Customers change their own safety and consent settings, resume after a pause, and download a per-request savings statement (CSV).
+- **Answer reuse at any temperature** for features the customer opts in (`cacheTags`).
+- **Landing page** at `/` with public stats (`/stats`), including the median delay WasteZero adds. Every answer carries an `X-WasteZero-Overhead-Ms` header.
+- **Paystack card setup is confirmed without a webhook**, so it can share a Paystack account whose webhook serves another platform.
+- **Deployment:** systemd, Caddy and nginx configs, a step-by-step guide ([docs/DEPLOY.md](docs/DEPLOY.md)), and an integration guide with a fallback snippet ([docs/INTEGRATION.md](docs/INTEGRATION.md)).
+- **Fixes:**
+  - Unsupported customer paths now return a 404 instead of a 500.
+  - `/v1/models` passes through to the provider.
+  - Customer errors are now OpenAI-shaped.
+  - Signup and audit rate limits now work behind a reverse proxy (`TRUST_PROXY`).
 
 ## What it does
 
@@ -118,10 +137,15 @@ Anti-spam rules for cold email differ by country (for example, CAN-SPAM in the U
 ## API
 
 **Customer** (customer key):
-- `POST /v1/chat/completions`
+- `POST /v1/chat/completions` and `GET /v1/models`
 - `GET /v1/wastezero/summary`: their spend, savings and rules
+- `GET` and `PATCH /v1/wastezero/settings`, `POST /v1/wastezero/resume`
+- `GET /v1/wastezero/waste-report`
+- `GET /v1/wastezero/statement?period=YYYY-MM`
 
 **Public:**
+- `GET /` (landing page), `GET /stats`
+- `GET /audit`, `POST /audit`, `GET /audit/:id`
 - `GET /health`
 - `GET|POST /signup`
 - `GET /billing/setup?token=`
@@ -132,7 +156,8 @@ Anti-spam rules for cold email differ by country (for example, CAN-SPAM in the U
 
 | Area | Endpoints |
 |---|---|
-| Customers | `GET/POST /admin/tenants`, `PATCH /admin/tenants/:id`, `POST /admin/tenants/:id/rotate-key`, `POST /admin/tenants/:id/card-link` |
+| Customers | `GET/POST /admin/tenants`, `PATCH /admin/tenants/:id`, `POST /admin/tenants/:id/rotate-key`, `POST /admin/tenants/:id/card-link`, `POST /admin/tenants/:id/pause` and `/resume` |
+| Waste | `GET /admin/waste-report?tenant=` |
 | Reporting | `GET /admin/summary?tenant=&from=&to=`, `GET /admin/events?tenant=&limit=`, `GET /admin/analysis?tenant=` |
 | Rules | `GET/POST /admin/rules`, `POST /admin/rules/:id/transition {"to","reason"}` |
 | Operator | `POST /admin/operator/run`, `GET /admin/operator/status`, `POST /admin/operator/kill`, `POST /admin/operator/resume`, `GET /admin/audit` |
@@ -149,7 +174,7 @@ Anti-spam rules for cold email differ by country (for example, CAN-SPAM in the U
 
 ## Before taking real customers
 
-This release has been tested end to end against mock providers (29 tests). It has **not** been run against live Stripe, Paystack, Resend or OpenAI accounts. Run each one in test mode first.
+This release has been tested end to end against mock providers (45 tests). It has **not** been run against live Stripe, Paystack, Resend or OpenAI accounts. Run each one in test mode first.
 
 Still to do before scale:
 - Put HTTPS and a reverse proxy in front.
@@ -160,7 +185,11 @@ Still to do before scale:
 ## Layout
 
 ```
-src/app.js          HTTP routes, proxy, admin API
+src/app.js          HTTP routes, proxy, admin and customer API
+src/guard.js        budgets, loop breaker, spike alerts
+src/audit.js        free audit from usage exports / OpenAI usage API
+src/waste.js        waste report on proxied traffic
+src/site.js         landing page, audit pages, public stats
 src/optimizer.js    which rule applies to a request
 src/evaluator.js    quality tests and grader
 src/analyzer.js     waste detection
@@ -172,6 +201,7 @@ src/prospecting.js  finding customers and outreach
 src/public.js       signup, card setup, unsubscribe, webhooks
 test/               unit and integration tests with mock providers
 scripts/            tenant CLI, one-off operator run
+deploy/             systemd, Caddy, nginx, update script
 ```
 
 Proprietary. All rights reserved, unless a separate written licence says otherwise.

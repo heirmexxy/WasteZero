@@ -144,6 +144,16 @@ function paystack(ctx) {
       return { url: data.authorization_url };
     },
 
+    // Confirms a card setup when the customer returns from checkout, so a webhook is not required.
+    // (A Paystack account has one webhook URL, which may already serve another platform.)
+    async verifySetup(reference) {
+      const d = await api("GET", `/transaction/verify/${encodeURIComponent(reference)}`);
+      const meta = typeof d.metadata === "string" ? JSON.parse(d.metadata || "{}") : d.metadata || {};
+      if (d.status !== "success" || meta.purpose !== "card_setup" || !d.authorization?.reusable) return null;
+      try { await api("POST", "/refund", { transaction: d.reference }); } catch (error) { ctx.log.error("setup refund failed:", error.message); }
+      return { type: "card_saved", tenantId: meta.tenant_id, billing: { authorizationCode: d.authorization.authorization_code, email: d.customer?.email, cardBrand: d.authorization.brand, cardLast4: d.authorization.last4 } };
+    },
+
     async charge(tenant, invoice, attempt) {
       const { authorizationCode, email } = tenant.billing || {};
       if (!authorizationCode) return { status: "awaiting_card" };

@@ -116,3 +116,18 @@ test("analyser proposes reuse for repeats and routing for short tasks", () => {
 test("previous billing period", () => {
   assert.equal(previousPeriod(new Date("2026-01-15T00:00:00Z")), "2025-12");
 });
+
+test("visitor address comes from X-Forwarded-For only when behind a trusted proxy", async () => {
+  const { clientIp } = await import("../src/util.js");
+  const req = { headers: { "x-forwarded-for": "203.0.113.9, 10.0.0.1" }, socket: { remoteAddress: "127.0.0.1" } };
+  assert.equal(clientIp(req, { trustProxy: true }), "203.0.113.9");
+  assert.equal(clientIp(req, { trustProxy: false }), "127.0.0.1");
+});
+
+test("overlapping savings are combined, never summed past total spend", async () => {
+  const { combineSavings } = await import("../src/util.js");
+  assert.equal(combineSavings(100, [50, 50]), 75);
+  assert.ok(combineSavings(277, [119, 55, 51, 25, 4.5, 2.3]) < 277 * 0.8);
+  assert.equal(combineSavings(0, [10]), 0);
+  assert.equal(combineSavings(100, [500]), 100);
+});

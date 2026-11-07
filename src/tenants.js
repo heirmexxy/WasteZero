@@ -20,8 +20,49 @@ export const DEFAULT_POLICY = Object.freeze({
   revenueSharePct: 20,          // fee as % of verified savings
   monthlyBaseFeeUsd: 0,         // fixed monthly subscription charged on top (0 = savings share only)
   cacheTtlSec: 3600,
-  cacheNondeterministic: false  // reuse answers even when temperature > 0
+  cacheNondeterministic: false, // reuse answers even when temperature > 0, for every feature
+  cacheTags: [],                // features (X-WasteZero-Tag) whose answers may be reused at any temperature
+
+  // Runaway-spend protection. 0 = no cap.
+  budgets: { dailyUsd: 0, monthlyUsd: 0, perTagDailyUsd: {}, perUserDailyUsd: 0 },
+  budgetAction: "block",        // block | alert, when a cap is reached
+  loopBreaker: { maxRepeats: 20, windowSec: 60, action: "alert" },   // alert | block | off
+  spikeAlert: { factor: 5, minHourlyUsd: 5, action: "alert" },      // alert | pause | off
+  alertEmail: "",               // defaults to the billing email
+  alertWebhookUrl: ""           // Slack-compatible incoming webhook (HTTPS)
 });
+
+/** Fields a customer may change themselves through /v1/wastezero/settings. Commercial terms are not among them. */
+export const CUSTOMER_EDITABLE = ["allowedOptimizations", "autoShadow", "autoPromote", "minQuality", "cacheTags", "cacheNondeterministic",
+  "budgets", "budgetAction", "loopBreaker", "spikeAlert", "alertEmail", "alertWebhookUrl"];
+
+const num = (v, min, max, name) => {
+  if (!Number.isFinite(v) || v < min || v > max) throw new Error(`${name} must be between ${min} and ${max}`);
+  return v;
+};
+const oneOf = (v, list, name) => { if (!list.includes(v)) throw new Error(`${name} must be one of ${list.join(", ")}`); return v; };
+const tagList = (v, name) => {
+  if (!Array.isArray(v) || v.some((t) => typeof t !== "string" || !/^[\w.:/-]{1,64}$/.test(t))) throw new Error(`${name} must be a list of feature tags`);
+  return [...new Set(v)];
+};
+
+function normalizeSafety(policy, base) {
+  const b = { ...base.budgets, ...(policy.budgets || {}) };
+  b.dailyUsd = num(b.dailyUsd, 0, 1e7, "budgets.dailyUsd");
+  b.monthlyUsd = num(b.monthlyUsd, 0, 1e8, "budgets.monthlyUsd");
+  b.perUserDailyUsd = num(b.perUserDailyUsd, 0, 1e7, "budgets.perUserDailyUsd");
+  if (!b.perTagDailyUsd || typeof b.perTagDailyUsd !== "object" || Array.isArray(b.perTagDailyUsd)) throw new Error("budgets.perTagDailyUsd must be an object of tag: usd");
+  for (const [t, v] of Object.entries(b.perTagDailyUsd)) { tagList([t], "budgets.perTagDailyUsd"); num(v, 0, 1e7, `budgets.perTagDailyUsd.${t}`); }
+  policy.budgets = { dailyUsd: b.dailyUsd, monthlyUsd: b.monthlyUsd, perTagDailyUsd: b.perTagDailyUsd, perUserDailyUsd: b.perUserDailyUsd };
+  oneOf(policy.budgetAction, ["block", "alert"], "budgetAction");
+  const lb = { ...base.loopBreaker, ...(policy.loopBreaker || {}) };
+  policy.loopBreaker = { maxRepeats: num(lb.maxRepeats, 2, 10000, "loopBreaker.maxRepeats"), windowSec: num(lb.windowSec, 5, 3600, "loopBreaker.windowSec"), action: oneOf(lb.action, ["alert", "block", "off"], "loopBreaker.action") };
+  const sa = { ...base.spikeAlert, ...(policy.spikeAlert || {}) };
+  policy.spikeAlert = { factor: num(sa.factor, 1.5, 1000, "spikeAlert.factor"), minHourlyUsd: num(sa.minHourlyUsd, 0, 1e6, "spikeAlert.minHourlyUsd"), action: oneOf(sa.action, ["alert", "pause", "off"], "spikeAlert.action") };
+  policy.cacheTags = tagList(policy.cacheTags, "cacheTags");
+  if (typeof policy.alertEmail !== "string" || (policy.alertEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(policy.alertEmail))) throw new Error("alertEmail is not valid");
+  if (typeof policy.alertWebhookUrl !== "string" || (policy.alertWebhookUrl && !/^https:\/\//.test(policy.alertWebhookUrl))) throw new Error("alertWebhookUrl must be an https URL");
+}
 
 const RANGES = {
   minQuality: [0.5, 1], minSamples: [5, 100000], shadowSampleRate: [0, 1], auditSampleRate: [0, 1],
@@ -29,7 +70,7 @@ const RANGES = {
 };
 
 export function normalizePolicy(input = {}, base = DEFAULT_POLICY) {
-  const policy = { ...base, ...input };
+  const policy = { ...DEFAULT_POLICY, ...base, ...input };
   if (!Array.isArray(policy.allowedOptimizations) || !policy.allowedOptimizations.every((o) => OPTIMIZATIONS.includes(o))) {
     throw new Error(`allowedOptimizations must be a list drawn from ${OPTIMIZATIONS.join(", ")}`);
   }
@@ -40,6 +81,7 @@ export function normalizePolicy(input = {}, base = DEFAULT_POLICY) {
   for (const key of ["autoShadow", "autoPromote", "cacheNondeterministic"]) {
     if (typeof policy[key] !== "boolean") throw new Error(`${key} must be true or false`);
   }
+  normalizeSafety(policy, { ...DEFAULT_POLICY, ...base });
   for (const key of Object.keys(policy)) if (!(key in DEFAULT_POLICY)) delete policy[key];
   return policy;
 }
@@ -57,6 +99,14 @@ export class Tenants {
 
   async init() {
     const data = await this.doc.load();
+    // Upgrade records written by older versions: fill in policy fields added since.
+    let upgraded = false;
+    for (const t of data.tenants) {
+      const missing = Object.keys(DEFAULT_POLICY).some((k) => !(k in (t.policy || {})));
+      if (missing) { t.policy = normalizePolicy({}, t.policy || {}); upgraded = true; }
+      if (!t.billing) { t.billing = { email: "", status: "no_card" }; upgraded = true; }
+    }
+    if (upgraded) await this.doc.save();
     // Backwards compatibility with v0.3's single WASTEZERO_API_KEY: an observe-only "default" customer.
     if (this.bootstrapKey) {
       const keyHash = sha256(this.bootstrapKey);
@@ -120,6 +170,14 @@ export class Tenants {
     if (!tenant) return null;
     tenant.billing = { ...(tenant.billing || {}), ...patch };
     if (patch.paymentMethodId || patch.authorizationCode) tenant.billing.status = "card_on_file";
+    await this.doc.save();
+    return tenant;
+  }
+
+  async setPaused(id, paused) {
+    const tenant = this.get(id);
+    if (!tenant) return null;
+    tenant.paused = paused || null;
     await this.doc.save();
     return tenant;
   }

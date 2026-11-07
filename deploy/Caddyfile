@@ -1,0 +1,8 @@
+# Use this if the server does NOT already run nginx or Apache on ports 80/443.
+# Caddy gets and renews the HTTPS certificate on its own.
+wastezero.tech, www.wastezero.tech {
+	encode gzip
+	reverse_proxy 127.0.0.1:8787 {
+		flush_interval -1   # pass streamed answers through immediately
+	}
+}

@@ -38,7 +38,7 @@ export function analyze({ events, tenant, config, now = Date.now(), options = {}
     const match = { model: g.model, tag: g.tag };
 
     // 1. The same request asked again: an answer could be reused.
-    const cacheable = good.filter((e) => !e.stream && (e.deterministic || tenant.policy.cacheNondeterministic) && e.optimization !== "cache");
+    const cacheable = good.filter((e) => !e.stream && (e.deterministic || tenant.policy.cacheNondeterministic || (tenant.policy.cacheTags || []).includes(e.tag)) && e.optimization !== "cache");
     const seen = new Set();
     let dupCalls = 0, dupCost = 0;
     for (const e of [...cacheable].sort((a, b) => a.timestamp.localeCompare(b.timestamp))) {

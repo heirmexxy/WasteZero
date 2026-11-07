@@ -1,0 +1,24 @@
+# /etc/systemd/system/wastezero.service
+[Unit]
+Description=WasteZero
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wastezero
+Group=wastezero
+WorkingDirectory=/opt/wastezero
+ExecStart=/usr/bin/node --env-file=/opt/wastezero/.env src/server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+# Hardening: the app can only write to its data folder.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/wastezero/data
+
+[Install]
+WantedBy=multi-user.target

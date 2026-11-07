@@ -1,9 +1,10 @@
 import { isDeterministic } from "./util.js";
 
-export function isCacheable(body, policy) {
+/** Reusable when the caller asked for repeatable output, or the customer opted this feature (or everything) in. */
+export function isCacheable(body, policy, tag = null) {
   if (body.stream === true) return false;
   if ((body.n ?? 1) !== 1) return false;
-  return isDeterministic(body) || policy.cacheNondeterministic === true;
+  return isDeterministic(body) || policy.cacheNondeterministic === true || (tag != null && (policy.cacheTags || []).includes(tag));
 }
 
 /**
@@ -15,7 +16,7 @@ export function plan({ tenant, body, tag, rules, evalBudgetLeftUsd, random = Mat
   const allowed = new Set(policy.allowedOptimizations);
   const result = { requestedModel: body.model, effectiveModel: body.model, routeRule: null, cacheRule: null, evaluation: null };
 
-  if (allowed.has("cache") && isCacheable(body, policy)) {
+  if (allowed.has("cache") && isCacheable(body, policy, tag)) {
     result.cacheRule = rules.match(tenant.id, "cache", body.model, tag, "active");
   }
 

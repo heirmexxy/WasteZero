@@ -18,6 +18,7 @@ export async function startMockProvider() {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
+      if (req.url.endsWith("/models")) { res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_models" }); return res.end(JSON.stringify({ object: "list", data: [{ id: "gpt-4o", object: "model" }] })); }
       const body = JSON.parse(raw);
       state.calls.push({ body, auth: req.headers.authorization });
       if (state.failNext > 0) { state.failNext--; res.writeHead(500, { "content-type": "application/json" }); return res.end('{"error":{"message":"boom"}}'); }
