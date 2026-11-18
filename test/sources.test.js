@@ -108,3 +108,21 @@ test("a GitHub org's published role address is used when its site shows none", a
   assert.equal(p.state, "drafted");
   await s.close();
 });
+
+test("companies scored without AI are re-scored once AI works", async () => {
+  const w = world();
+  let aiDown = true;
+  const inner = w.fetch;
+  w.fetch = async (url, init) => (aiDown && new URL(url).host === "model.test") ? json({ error: { message: "The model `gpt-x` does not exist" } }, 404) : inner(url, init);
+  const s = await startApp({ ...env, PROSPECT_SOURCES: "yc", HUNTER_API_KEY: "" }, { fetch: w.fetch, lookup: w.lookup });
+  const report = { escalations: [], agents: {} };
+  await runProspecting(s.ctx, report);
+  const small = s.ctx.prospects.byDomain("small.ai");
+  assert.equal(small.state, "disqualified");
+  assert.equal(report.prospecting.aiScoringDown, true);
+  assert.match(s.ctx.lastAiError.message, /does not exist/);
+  aiDown = false;
+  await runProspecting(s.ctx, { escalations: [] });
+  assert.equal(s.ctx.prospects.byDomain("small.ai").state, "drafted");
+  await s.close();
+});

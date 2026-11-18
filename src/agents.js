@@ -444,6 +444,7 @@ export async function runAgents(ctx, report, { now = new Date(), only = null } =
       report.agents.prospector = r ? [
         r.sources ? `found ${r.discovered} new (${Object.entries(r.sources).map(([k, v]) => `${k}: ${v}`).join(", ")})` : null,
         `${r.enriched} researched`, `${r.qualified} qualified`, `${r.drafted} drafted for your approval`, `${r.sent} sent`,
+        r.aiScoringDown ? `AI scoring failed${ctx.lastAiError ? ` (${ctx.lastAiError.message})` : ""}, so companies were scored on keywords only and will be re-scored` : null,
         r.blocked ? `blocked: ${r.blocked}` : null
       ].filter(Boolean).join("; ") : "ran";
     }]

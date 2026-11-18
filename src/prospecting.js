@@ -192,6 +192,11 @@ export async function qualify(ctx, p) {
     messages: [{ role: "system", content: QUALIFY_SYSTEM }, { role: "user", content: evidence }] }, { tag: "agent-prospector", purpose: "agent" });
   let verdict = null;
   if (res.ok) { try { verdict = JSON.parse(res.data.choices?.[0]?.message?.content || ""); } catch { /* fall through */ } }
+  else {
+    const detail = res.data?.error?.message || res.data?.error || (res.status ? `HTTP ${res.status}` : "no AI provider reachable");
+    ctx.lastAiError = { at: new Date().toISOString(), agent: "prospector", model: pc.model, status: res.status, message: String(typeof detail === "string" ? detail : JSON.stringify(detail)).slice(0, 300) };
+    ctx.log?.error?.(`prospector: AI scoring failed (${res.status}): ${ctx.lastAiError.message}`);
+  }
   if (!verdict || !Number.isFinite(Number(verdict.fit))) {
     // No grader available: rely on visible AI signals only, and write no personal line.
     verdict = { fit: Math.min(10, (p.aiSignals || 0) * 2), reason: `${p.aiSignals || 0} AI signals on the public site (no grader available)`, personalization: "" };
@@ -259,10 +264,14 @@ export async function runProspecting(ctx, report, { now = new Date() } = {}) {
   }
 
   for (const p of ctx.prospects.list("discovered").slice(0, pc.batchSize)) { await enrich(ctx, p); if (p.state === "enriched") out.enriched++; }
+  // Companies scored without AI (the AI call failed) get a second look once AI scoring works.
+  const graded = ctx.prospects.list("disqualified").filter((p) => /no grader available/.test(p.reason || ""));
+  for (const p of graded.slice(0, pc.batchSize)) await ctx.prospects.set(p, "enriched", {}, "re-scoring with AI");
   for (const p of ctx.prospects.list("enriched").slice(0, pc.batchSize)) {
     if (ctx.tenants.findByEmail(p.contactEmail) || ctx.tenants.list().some((t) => t.website && t.website.includes(p.domain))) { await ctx.prospects.set(p, "closed", {}, "already a customer"); continue; }
     await qualify(ctx, p);
     if (p.state === "qualified") out.qualified++;
+    if (/no grader available/.test(p.reason || "")) out.aiScoringDown = true;
   }
   for (const p of ctx.prospects.list("qualified")) {
     await ctx.prospects.set(p, pc.autoSend ? "approved" : "drafted", {}, pc.autoSend ? "auto-send enabled" : "awaiting approval");
