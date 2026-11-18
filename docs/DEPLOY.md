@@ -1,5 +1,26 @@
 # Deploying WasteZero to wastezero.tech
 
+## Quickest: a server that runs Dokploy (one line)
+
+1. Point the domain at the server: two **A** records (`@` and `www`) in hPanel, both set to the server's IP.
+2. Open the server's terminal (for example, Hostinger's browser terminal) and paste this line:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/heirmexxy/wastezero/main/deploy/install.sh | bash
+   ```
+
+The script does everything below on its own, with no Docker image and no Dokploy dashboard:
+- installs a private copy of Node.js, so other apps keep their own;
+- downloads the code and runs the tests;
+- creates the settings file with a new admin key (saved in `/root/wastezero-admin-key.txt`);
+- starts WasteZero as a service;
+- adds a route file so Dokploy's Traefik serves https://wastezero.tech with its own certificate.
+
+Running the same line again updates WasteZero and keeps your settings and data.
+
+The manual steps below are for servers without Dokploy.
+
+---
+
 These steps put WasteZero on one of your Hostinger VPS servers, with HTTPS and no Docker. Do them in order. Each step ends with a check, so you know it worked before moving on.
 
 Pick the server with the most free memory (one of the KVM 2 machines is a good choice). Commands run over SSH as root unless the step says otherwise.
@@ -126,7 +147,7 @@ In `.env`, set `OPERATOR_INTERVAL_MS=3600000` (hourly), and set `ESCALATION_WEBH
 ```bash
 sudo bash /opt/wastezero/deploy/update.sh
 ```
-This pulls the latest code from GitHub, runs the tests, restarts WasteZero, and checks that it's healthy.
+This runs the installer again: it pulls the latest code, runs the tests, restarts WasteZero, and keeps your settings and data.
 
 ## Backups
 Everything lives in `/opt/wastezero/data`. Back it up daily, for example:
