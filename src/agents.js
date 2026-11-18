@@ -89,7 +89,13 @@ async function think(ctx, agent, system, user, { json = false, maxTokens = 700 }
     ...(json ? { response_format: { type: "json_object" } } : {}),
     messages: [{ role: "system", content: system }, { role: "user", content: user }]
   }, { tag: `agent-${agent}`, purpose: "agent" });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const detail = res.data?.error?.message || res.data?.error || (res.status ? `HTTP ${res.status}` : "no AI provider reachable (is a provider key set?)");
+    ctx.lastAiError = { at: new Date().toISOString(), agent, model: ctx.config.agents.model, status: res.status, message: String(typeof detail === "string" ? detail : JSON.stringify(detail)).slice(0, 300) };
+    ctx.log?.error?.(`agent ${agent}: AI call failed (${ctx.lastAiError.status}): ${ctx.lastAiError.message}`);
+    return null;
+  }
+  ctx.lastAiError = null;
   const text = res.data?.choices?.[0]?.message?.content;
   if (!text) return null;
   if (!json) return text.trim();
@@ -217,7 +223,7 @@ export async function writeBrief(ctx, facts = null, now = new Date()) {
     `2. Help the ${facts.waitingForFirstRequest} waiting customer(s) send their first request.`,
     "3. Turn waste reports into approved savings."
   ].join("\n");
-  return { date: now.toISOString().slice(0, 10), at: now.toISOString(), text: prose || fallback, writtenBy: prose ? "ai" : "template", facts, progress };
+  return { date: now.toISOString().slice(0, 10), at: now.toISOString(), text: prose || fallback, writtenBy: prose ? "ai" : "template", aiError: prose ? null : (ctx.lastAiError || null), facts, progress };
 }
 
 async function deliverBrief(ctx, brief) {
@@ -432,9 +438,14 @@ export async function runAgents(ctx, report, { now = new Date(), only = null } =
     ["onboarding", () => onboarding(ctx, report, now)],
     ["reliability", () => reliability(ctx, report, now)],
     ["prospector", async () => {
-      if (!ctx.config.prospecting.enabled) { report.agents.prospector = "off (PROSPECTING_ENABLED=false)"; return; }
+      if (!ctx.config.prospecting.enabled) { report.agents.prospector = "off: set PROSPECTING_ENABLED=true in the server settings and restart"; return; }
       await runProspecting(ctx, report, { now });
-      report.agents.prospector = report.prospecting ? `${report.prospecting.sent} sent, ${report.prospecting.drafted} drafted` : "ran";
+      const r = report.prospecting;
+      report.agents.prospector = r ? [
+        r.sources ? `found ${r.discovered} new (${Object.entries(r.sources).map(([k, v]) => `${k}: ${v}`).join(", ")})` : null,
+        `${r.enriched} researched`, `${r.qualified} qualified`, `${r.drafted} drafted for your approval`, `${r.sent} sent`,
+        r.blocked ? `blocked: ${r.blocked}` : null
+      ].filter(Boolean).join("; ") : "ran";
     }]
   ];
   for (const [name, fn] of steps) {

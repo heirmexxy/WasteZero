@@ -43,6 +43,8 @@ Every decision is logged. **Money, contracts and anything that can't be undone s
 
 **The physician heals itself.** All of WasteZero's own AI calls go through WasteZero, on an internal account with per-agent budgets, caching and routing. Grader calls are never downgraded. The console shows its own spend and savings.
 
+**Finding customers.** The Prospector searches five places daily: LLM job posts in Hacker News "Who is hiring", Y Combinator's AI companies, GitHub organisations with active LLM repositories, Show HN launches and Product Hunt's AI topic. It researches each company's public site and finds a role address (hello@, sales@), using Hunter.io when the site shows none. Then it scores fit with AI and drafts an email for your approval. You can also import your own list of domains in the console.
+
 **Moat features**
 - Cheapest healthy provider with automatic failover (`MODEL_OFFERS_JSON`).
 - Telegram alerts with Pause/Resume buttons.

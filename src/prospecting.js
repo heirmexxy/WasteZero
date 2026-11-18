@@ -5,6 +5,8 @@ import { JsonDoc } from "./store.js";
 import { signToken, link } from "./tokens.js";
 import { escapeHtml } from "./util.js";
 import { DEFAULT_POLICY } from "./tenants.js";
+import { discoverAll, hunterRoleEmail, rootDomain } from "./sources.js";
+export { rootDomain };
 
 /**
  * Finding customers, in stages:
@@ -20,7 +22,6 @@ import { DEFAULT_POLICY } from "./tenants.js";
  */
 
 const ROLE_ADDRESSES = new Set(["hello", "hi", "hey", "contact", "info", "sales", "team", "founders", "founder", "partnerships", "partners", "business", "growth", "bd"]);
-const SKIP_DOMAINS = /(^|\.)(github\.com|github\.io|gitlab\.com|youtube\.com|youtu\.be|medium\.com|substack\.com|twitter\.com|x\.com|linkedin\.com|producthunt\.com|apple\.com|google\.com|huggingface\.co|notion\.site|vercel\.app|netlify\.app|reddit\.com|ycombinator\.com|arxiv\.org|wikipedia\.org|npmjs\.com|pypi\.org|chrome\.google\.com|herokuapp\.com|pages\.dev|replit\.app|streamlit\.app)$/i;
 const AI_SIGNALS = [/\bGPT[-‑ ]?\d/i, /\bLLMs?\b/, /\bOpenAI\b/i, /\bAnthropic\b|\bClaude\b/, /\bGemini\b/, /\bAI[- ](powered|agents?|assistant|copilot|native)\b/i, /\bgenerative AI\b/i, /\bchatbots?\b/i, /\bRAG\b/, /\bembeddings?\b/i, /\blanguage models?\b/i];
 const MAX_PAGE_BYTES = 512 * 1024;
 
@@ -77,7 +78,6 @@ export function isPrivateAddress(ip) {
   return v === "::1" || v === "::" || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe8") || v.startsWith("fe9") || v.startsWith("fea") || v.startsWith("feb");
 }
 
-export const rootDomain = (hostname) => hostname.toLowerCase().replace(/^www\./, "");
 
 async function fetchPage(ctx, url, redirects = 3) {
   const u = new URL(url);
@@ -155,35 +155,14 @@ export async function enrich(ctx, p) {
   const preferred = ["founders", "founder", "hello", "hi", "sales", "partnerships", "team", "contact", "info"];
   emails.sort((a, b) => preferred.indexOf(a.split("@")[0]) - preferred.indexOf(b.split("@")[0]));
   const company = { title: home.title, description: home.description, excerpt: allText.slice(0, 3000) };
-  if (!emails.length) return ctx.prospects.set(p, "no_contact", { company, aiSignals }, "no role address on the public site");
-  return ctx.prospects.set(p, "enriched", { company, aiSignals, contactEmail: emails[0] });
+  if (!emails.length && p.sourceEmail && p.sourceEmail.endsWith("@" + p.domain) && ROLE_ADDRESSES.has(p.sourceEmail.split("@")[0].split("+")[0])) emails.push(p.sourceEmail);
+  let via = emails.length ? "site" : null;
+  if (!emails.length) { const h = await hunterRoleEmail(ctx, p.domain, ROLE_ADDRESSES); if (h) { emails.push(h); via = "hunter"; } }
+  if (!emails.length) return ctx.prospects.set(p, "no_contact", { company, aiSignals }, ctx.config.prospecting.hunterApiKey ? "no role address on the site or in Hunter" : "no role address on the public site");
+  return ctx.prospects.set(p, "enriched", { company, aiSignals, contactEmail: emails[0], contactVia: via });
 }
 
 // ------------------------------------------------------------ discovery
-
-export async function discoverFromHackerNews(ctx, { now = Date.now() } = {}) {
-  const pc = ctx.config.prospecting;
-  const since = Math.floor(now / 1000) - 30 * 86400;
-  let added = 0;
-  for (const query of pc.queries) {
-    try {
-      const url = `${pc.hnApiBase}/search_by_date?${new URLSearchParams({ query, tags: "show_hn", hitsPerPage: "50", numericFilters: `created_at_i>${since}` })}`;
-      const res = await ctx.fetch(url, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) continue;
-      const { hits = [] } = await res.json();
-      for (const hit of hits) {
-        if (!hit.url) continue;
-        let domain;
-        try { domain = rootDomain(new URL(hit.url).hostname); } catch { continue; }
-        if (SKIP_DOMAINS.test(domain) || ctx.prospects.byDomain(domain)) continue;
-        if (await ctx.prospects.add({ domain, url: hit.url, source: { type: "hackernews", ref: hit.objectID, title: String(hit.title || "").slice(0, 200), query } })) added++;
-      }
-    } catch (error) { ctx.log.error(`discovery "${query}" failed:`, error.message); }
-  }
-  ctx.prospects.data.lastDiscoveryAt = new Date(now).toISOString();
-  await ctx.prospects.doc.save();
-  return added;
-}
 
 export async function importDomains(ctx, domains, source = { type: "import" }) {
   const added = [];
@@ -271,7 +250,13 @@ export async function runProspecting(ctx, report, { now = new Date() } = {}) {
   const pc = ctx.config.prospecting;
   const out = { discovered: 0, enriched: 0, qualified: 0, drafted: 0, sent: 0, followedUp: 0, blocked: null };
   const last = ctx.prospects.data.lastDiscoveryAt ? Date.parse(ctx.prospects.data.lastDiscoveryAt) : 0;
-  if (now.getTime() - last >= pc.discoverEveryHours * 3600_000) out.discovered = await discoverFromHackerNews(ctx, { now: now.getTime() });
+  if (now.getTime() - last >= pc.discoverEveryHours * 3600_000) {
+    const d = await discoverAll(ctx, { now: now.getTime() });
+    out.discovered = d.added; out.sources = d.bySource;
+    ctx.prospects.data.lastDiscoveryAt = now.toISOString();
+    ctx.prospects.data.lastDiscovery = { at: now.toISOString(), bySource: d.bySource };
+    await ctx.prospects.doc.save();
+  }
 
   for (const p of ctx.prospects.list("discovered").slice(0, pc.batchSize)) { await enrich(ctx, p); if (p.state === "enriched") out.enriched++; }
   for (const p of ctx.prospects.list("enriched").slice(0, pc.batchSize)) {

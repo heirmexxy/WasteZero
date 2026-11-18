@@ -1011,7 +1011,7 @@ async function handleAdmin(ctx, req, res, url) {
   // Finding customers
   if (m === "GET" && p === "/admin/prospects") {
     const state = q("state");
-    return send(res, 200, { prospects: ctx.prospects.list(state).map(({ company, ...rest }) => ({ ...rest, company: company ? { title: company.title, description: company.description } : null })), suppression: ctx.prospects.data.suppression });
+    return send(res, 200, { prospects: ctx.prospects.list(state).map(({ company, ...rest }) => ({ ...rest, company: company ? { title: company.title, description: company.description } : null })), suppression: ctx.prospects.data.suppression, lastDiscovery: ctx.prospects.data.lastDiscovery || null });
   }
   if (m === "POST" && p === "/admin/prospects") {
     const b = await body();
