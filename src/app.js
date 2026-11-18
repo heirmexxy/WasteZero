@@ -9,7 +9,7 @@ import { ResponseCache } from "./cache.js";
 import { plan } from "./optimizer.js";
 import { estimateCost, tokensFromUsage, costForTokens } from "./pricing.js";
 import { runEvaluation, EvalBudget } from "./evaluator.js";
-import { summarize, inWindow } from "./reports.js";
+import { summarize, inWindow, statementCsv } from "./reports.js";
 import { analyze } from "./analyzer.js";
 import { computeInvoice, reconcile, issueInvoice, latestInvoices, renderInvoiceHtml } from "./billing.js";
 import { runOperator, note, killSwitchPath, isHalted } from "./operator.js";
@@ -20,6 +20,20 @@ import { collect, cardSetupUrl } from "./collections.js";
 import { Prospects, runProspecting, importDomains, draftEmail } from "./prospecting.js";
 import { handlePublic, PUBLIC_PATHS } from "./public.js";
 import { SpendMeter, LoopDetector, checkRequest, meterAndCheck } from "./guard.js";
+import { ACCOUNT_PATHS, handleAccounts, isAdminSession, fromDashboard } from "./accounts.js";
+import { handleApp } from "./dashboard.js";
+import { handleConsole, adminOverview } from "./console.js";
+import { PAGE_PATHS, handlePages } from "./pages.js";
+import { handleTelegram, setupTelegramWebhook } from "./telegram.js";
+import { ProviderHealth, rankOffers, customerKeysFrom } from "./offers.js";
+import { Company, runAgents, receiveInbound, approveTask, teamStatus, writeBrief, reliability } from "./agents.js";
+import { handleContact, CONTACT_PATHS } from "./contact.js";
+import { setPublicBase } from "./ui.js";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+const BRAND_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "brand");
+const BRAND_TYPES = { ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
 import { CUSTOMER_EDITABLE } from "./tenants.js";
 import { wasteReport } from "./waste.js";
 import { handleSite, SITE_PATHS } from "./site.js";
@@ -27,7 +41,7 @@ import { sha256 } from "./util.js";
 import { resolveProvider, providerKey, providerHeaders, openaiHeaders } from "./providers.js";
 import { PrefixTracker, addCacheBreakpoints, toOpenAIShape, finishReasonOf, anthropicErrorBody } from "./anthropic.js";
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 
 // Provider headers worth passing back: request IDs for support, rate-limit headers for client back-off.
 const PASSTHROUGH = /^(x-request-id|request-id|openai-|x-ratelimit-|anthropic-ratelimit-|retry-after)/i;
@@ -86,6 +100,7 @@ function passthroughHeaders(headers) {
 
 export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, logger = console, random = Math.random, lookup = null } = {}) {
   const file = (name) => path.join(config.dataDir, name);
+  setPublicBase(config.publicBaseUrl);
   const ctx = {
     config, fetch: fetchImpl, log: logger, random, lookup,
     tenants: new Tenants(file("tenants.json"), { bootstrapKey: config.bootstrapTenantKey }),
@@ -97,15 +112,22 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
     outbox: new JsonlLog(file("outbox.jsonl")),
     prospects: new Prospects(file("prospects.json")),
     audits: new JsonlLog(file("audits.jsonl")),
+    inbox: new JsonlLog(file("inbox.jsonl")),
+    company: new Company(config.dataDir),
     budget: new EvalBudget(),
     meter: new SpendMeter(),
     loops: new LoopDetector(),
     cache: new ResponseCache({ maxEntries: config.cacheMaxEntries }),
-    prefixes: new PrefixTracker()
+    prefixes: new PrefixTracker(),
+    health: new ProviderHealth()
   };
   await ctx.tenants.init();
   await ctx.rules.init();
   await ctx.prospects.init();
+  await ctx.company.init();
+  // WasteZero's own account: its agents and grader call AI through WasteZero itself.
+  const perAgent = Object.fromEntries(["agent-chief_of_staff", "agent-inbox", "agent-prospector", "agent-onboarding"].map((t) => [t, Math.max(0.5, config.agents.dailyBudgetUsd / 4)]));
+  ctx.internalKey = (await ctx.tenants.ensureInternal({ dailyBudgetUsd: config.agents.dailyBudgetUsd, perAgentDailyUsd: perAgent })).apiKey;
   ctx.mailer = createMailer(ctx);
   ctx.payments = createPayments(ctx);
   ctx.budget.load(await ctx.evals.all());
@@ -115,7 +137,19 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
    * Non-streaming OpenAI-format call with WasteZero's own key, to whichever provider serves the model.
    * Used for quality testing and grading.
    */
-  ctx.callModel = async (body) => {
+  ctx.callModel = async (body, { tag = "grader", purpose = "eval" } = {}) => {
+    // Dogfooding: WasteZero's own AI calls go through WasteZero, on its internal account.
+    if (ctx.selfUrl && ctx.internalKey) {
+      try {
+        const r = await ctx.fetch(`${ctx.selfUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${ctx.internalKey}`, "content-type": "application/json", "x-wastezero-tag": tag, "x-wastezero-purpose": purpose },
+          body: JSON.stringify({ ...body, stream: false }), signal: AbortSignal.timeout(config.timeoutMs + 5000)
+        });
+        const data = await r.json().catch(() => null);
+        if (r.status !== 502 && r.status !== 503) return { ok: r.ok && !!data, status: r.status, data };
+      } catch { /* fall through to a direct call */ }
+    }
     const { provider } = resolveProvider(config, { model: body.model });
     if (!provider?.serverKey) return { ok: false, status: 0 };
     try {
@@ -136,7 +170,8 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
       else res.destroy();
     });
   });
-  return { server, ctx, runOperator: (opts) => runOperator(ctx, opts) };
+  return { server, ctx, runOperator: (opts) => runOperator(ctx, opts), setupTelegram: () => setupTelegramWebhook(ctx),
+    runReliability: () => reliability(ctx), runAgents: (opts = {}) => runAgents(ctx, { agents: {}, escalations: [] }, opts) };
 }
 
 async function handle(ctx, req, res) {
@@ -144,6 +179,31 @@ async function handle(ctx, req, res) {
   const p = url.pathname;
 
   if (req.method === "GET" && p === "/health") return send(res, 200, { ok: true, service: "wastezero", version: VERSION });
+  if (req.method === "GET" && (p.startsWith("/brand/") || p === "/favicon.ico")) {
+    const name = p === "/favicon.ico" ? "favicon.svg" : path.basename(p);
+    const type = BRAND_TYPES[path.extname(name)];
+    if (!type) return send(res, 404, { error: "Not found" });
+    try {
+      const data = await readFile(path.join(BRAND_DIR, name));
+      res.writeHead(200, { "content-type": type, "cache-control": "public, max-age=86400" });
+      return res.end(data);
+    } catch { return send(res, 404, { error: "Not found" }); }
+  }
+  if (PAGE_PATHS.has(p) && handlePages(ctx.config, req, res, url)) return;
+  if (p === "/webhooks/telegram" && req.method === "POST") return handleTelegram(ctx, req, res);
+  if (CONTACT_PATHS.has(p)) {
+    const handled = await handleContact(ctx, req, res, url);
+    if (handled !== null || res.headersSent) return;
+  }
+  if (ACCOUNT_PATHS.has(p)) {
+    const handled = await handleAccounts(ctx, req, res, url);
+    if (handled !== null || res.headersSent) return;
+  }
+  if (p === "/app" || p.startsWith("/app/")) {
+    const handled = await handleApp(ctx, req, res, url);
+    if (handled !== null || res.headersSent) return;
+  }
+  if (p === "/console" || p === "/console/") return handleConsole(ctx, req, res, url);
   if (SITE_PATHS.has(p) || p.startsWith("/audit/")) {
     const handled = await handleSite(ctx, req, res, url);
     if (handled !== null || res.headersSent) return;
@@ -154,7 +214,10 @@ async function handle(ctx, req, res) {
   }
 
   if (p.startsWith("/admin/")) {
-    if (!ctx.config.adminKey || !safeEqual(bearer(req), ctx.config.adminKey)) return send(res, 401, { error: "Unauthorized" });
+    // The admin API takes the admin key, or the admin console's sign-in cookie (changes need the console header).
+    const keyOk = ctx.config.adminKey && safeEqual(bearer(req), ctx.config.adminKey);
+    const consoleOk = isAdminSession(ctx, req) && (req.method === "GET" || fromDashboard(req));
+    if (!keyOk && !consoleOk) return send(res, 401, { error: "Unauthorized" });
     return handleAdmin(ctx, req, res, url);
   }
 
@@ -229,13 +292,6 @@ async function handleCustomer(ctx, req, res, url, tenant) {
   return oaiError(res, 404, "not_found", "Not found");
 }
 
-/** Every request in the period with its cost, what it would have cost, and the saving. No prompt content. */
-export function statementCsv(events, tenantId, period) {
-  const cols = ["timestamp", "tag", "requestedModel", "servedModel", "optimization", "status", "promptTokens", "cachedTokens", "completionTokens", "actualCostUsd", "baselineCostUsd", "savingsUsd"];
-  const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
-  const rows = events.filter((e) => e.tenantId === tenantId && e.timestamp?.startsWith(period)).map((e) => cols.map((c) => esc(e[c])).join(","));
-  return [cols.join(","), ...rows].join("\n") + "\n";
-}
 function sendCsv(res, filename, csv) {
   res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" });
   res.end(csv);
@@ -273,6 +329,19 @@ function costs(ctx, base, servedModel, usage, routed, ok, { format = "openai", p
   };
 }
 
+/**
+ * WasteZero's own quality grader and test calls must run on exactly the model asked for:
+ * a cheaper grader would make the quality tests unreliable. Everything else of its own is optimised.
+ */
+function protectGrader(tenant, req, decision) {
+  if (tenant.internal && req.headers["x-wastezero-purpose"] === "eval") {
+    decision.routeRule = null;
+    decision.effectiveModel = decision.requestedModel;
+    decision.evaluation = null;
+  }
+  return decision;
+}
+
 /** Routing only within the same provider: the customer's key and request format belong to it. */
 function keepRoutingOnProvider(ctx, decision, provider, req) {
   const header = req.headers["x-wastezero-provider"];
@@ -298,6 +367,8 @@ async function handleChat(ctx, req, res, tenant) {
     return oaiError(res, 400, "invalid_request", "Expected a chat-completions JSON body with model and messages");
   }
 
+  if (config.offers[body.model]) return handleOffer(ctx, req, res, tenant, body, receivedAt);
+
   const { provider, error: providerError } = resolveProvider(config, { model: body.model, header: req.headers["x-wastezero-provider"] });
   if (providerError) return oaiError(res, 400, "unknown_provider", providerError);
   // Bring-your-own-key: the customer's provider key, so the provider bills them directly.
@@ -311,6 +382,7 @@ async function handleChat(ctx, req, res, tenant) {
   const fp = fingerprint(body);
   const base = {
     timestamp: new Date().toISOString(), tenantId: tenant.id, provider: provider.name, format: "openai", tag, endUser, requestedModel: body.model,
+    endUserLabel: tenant.policy.storeEndUserIds && rawUser ? String(rawUser).slice(0, 64) : null, plan: sanitizeTag(req.headers["x-wastezero-plan"]),
     fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
     maxTokens: Number(body.max_completion_tokens ?? body.max_tokens) || null
   };
@@ -323,7 +395,7 @@ async function handleChat(ctx, req, res, tenant) {
       actualCostUsd: 0, baselineCostUsd: 0, savingsUsd: 0, optimization: null, blocked: block.code, status: block.status, latencyMs: Date.now() - receivedAt });
     return;
   }
-  const decision = keepRoutingOnProvider(ctx, plan({ tenant, body, tag, rules: ctx.rules, evalBudgetLeftUsd: ctx.budget.left(tenant), random: ctx.random }), provider, req);
+  const decision = protectGrader(tenant, req, keepRoutingOnProvider(ctx, plan({ tenant, body, tag, rules: ctx.rules, evalBudgetLeftUsd: ctx.budget.left(tenant), random: ctx.random }), provider, req));
 
   // Reuse a stored answer to an identical request.
   if (decision.cacheRule) {
@@ -381,6 +453,85 @@ async function handleChat(ctx, req, res, tenant) {
     runEvaluation(ctx, { tenant, rule: decision.evaluation.rule, mode: decision.evaluation.mode, body, primary: data })
       .catch((error) => ctx.log.error("evaluation failed:", error.message));
   }
+}
+
+/**
+ * A model sold by several providers (MODEL_OFFERS_JSON): try the cheapest healthy provider first and
+ * move to the next on an outage, rate limit or server error. Saving = reference offer price − actual.
+ */
+async function handleOffer(ctx, req, res, tenant, body, receivedAt) {
+  const { config } = ctx;
+  const offers = rankOffers(config, body.model, { customerKeys: customerKeysFrom(req), health: ctx.health });
+  if (!offers.length) return oaiError(res, 503, "no_provider_key", `No key for any provider of ${body.model}: send X-Upstream-Keys with your keys, e.g. {"groq":"gsk_..."}`);
+  const tag = sanitizeTag(req.headers["x-wastezero-tag"]);
+  const rawUser = req.headers["x-wastezero-user"] || (typeof body.user === "string" ? body.user : "");
+  const endUser = rawUser ? sha256(`${tenant.id}:${rawUser}`).slice(0, 16) : null;
+  const fp = fingerprint(body);
+  const base = {
+    timestamp: new Date().toISOString(), tenantId: tenant.id, format: "openai", tag, endUser, requestedModel: body.model,
+    endUserLabel: tenant.policy.storeEndUserIds && rawUser ? String(rawUser).slice(0, 64) : null, plan: sanitizeTag(req.headers["x-wastezero-plan"]),
+    fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true, maxTokens: Number(body.max_completion_tokens ?? body.max_tokens) || null
+  };
+  const block = checkRequest(ctx, tenant, { tag, endUser, fp });
+  if (block) {
+    oaiError(res, block.status, block.code, block.message);
+    await record(ctx, { ...base, servedModel: null, promptTokens: 0, cachedTokens: 0, completionTokens: 0, totalTokens: 0,
+      actualCostUsd: 0, baselineCostUsd: 0, savingsUsd: 0, optimization: null, blocked: block.code, status: block.status, latencyMs: Date.now() - receivedAt });
+    return;
+  }
+  const reference = config.offers[body.model][0];
+
+  if (body.stream === true) {
+    // Streams can't be retried once started, so they go to the best healthy offer.
+    const o = offers[0];
+    const meta = { ...base, provider: o.provider.name, keySource: o.keySource, optimization: null, ruleId: null, offerReference: reference.model };
+    return streamChat(ctx, req, res, { forwarded: { ...body, model: o.model }, body, meta, decision: { effectiveModel: o.model, routeRule: null },
+      upstreamKey: o.key, extraHeaders: { "x-wastezero-provider": o.provider.name }, receivedAt, provider: o.provider });
+  }
+
+  const started = Date.now();
+  let served = null, upstream = null, raw = "", tried = [];
+  for (const o of offers) {
+    tried.push(o.provider.name);
+    try {
+      const r = await ctx.fetch(`${o.provider.openaiBaseUrl}/chat/completions`, {
+        method: "POST", headers: openaiHeaders(o.key), body: JSON.stringify({ ...body, model: o.model }), signal: AbortSignal.timeout(config.timeoutMs)
+      });
+      const text = await r.text();
+      if (r.status === 429 || r.status >= 500) { ctx.health.fail(o.provider.name); upstream = r; raw = text; continue; }
+      ctx.health.ok(o.provider.name);
+      served = o; upstream = r; raw = text;
+      break;
+    } catch { ctx.health.fail(o.provider.name); }
+  }
+  const upstreamMs = Date.now() - started;
+  if (!upstream) {
+    oaiError(res, 502, "all_providers_failed", `Every provider for ${body.model} failed (${tried.join(", ")})`);
+    await record(ctx, { ...base, provider: tried.at(-1), servedModel: null, promptTokens: 0, cachedTokens: 0, completionTokens: 0, totalTokens: 0,
+      actualCostUsd: 0, baselineCostUsd: 0, savingsUsd: 0, optimization: null, status: 502, latencyMs: upstreamMs });
+    return;
+  }
+  const o = served || offers.at(-1);
+  let data = null;
+  try { data = JSON.parse(raw); } catch { /* handled below */ }
+  const ok = !!served && upstream.ok && data !== null;
+  const t = tokensFromUsage(data?.usage);
+  const actual = costForTokens(o.model, t, config.modelRates, o.provider.pricing);
+  const baselineCost = costForTokens(reference.model, t, config.modelRates, config.providers[reference.provider].pricing);
+  const savings = ok && !o.reference && actual != null && baselineCost != null ? Number((baselineCost - actual).toFixed(10)) : 0;
+  const overheadMs = Math.max(0, Date.now() - receivedAt - upstreamMs);
+  const event = { ...base, provider: o.provider.name, keySource: o.keySource, servedModel: data?.model || o.model, offerReference: reference.model,
+    promptTokens: t.prompt, cachedTokens: t.cached, completionTokens: t.completion, totalTokens: t.prompt + t.completion,
+    actualCostUsd: actual, baselineCostUsd: o.reference ? actual : baselineCost, savingsUsd: savings,
+    optimization: ok && !o.reference ? "offer" : null, failovers: tried.length - 1,
+    status: ok ? upstream.status : (data === null && upstream.ok ? 502 : upstream.status), finishReason: data?.choices?.[0]?.finish_reason ?? null,
+    latencyMs: upstreamMs, overheadMs };
+  try { meterAndCheck(ctx, event); } catch (error) { ctx.log.error("spend check failed:", error.message); }
+  send(res, event.status, data ?? { error: { message: "Provider returned a non-JSON response" } }, {
+    ...passthroughHeaders(upstream.headers), "x-wastezero-provider": o.provider.name, "x-wastezero-overhead-ms": String(overheadMs),
+    ...(tried.length > 1 ? { "x-wastezero-failover": tried.join(">") } : {})
+  });
+  await record(ctx, event, { metered: true });
 }
 
 async function streamChat(ctx, req, res, { forwarded, body, meta, decision, upstreamKey, extraHeaders, receivedAt, provider }) {
@@ -502,6 +653,7 @@ async function handleMessages(ctx, req, res, tenant) {
   const fp = fingerprint({ ...body, _wzFormat: "anthropic" });
   const base = {
     timestamp: new Date().toISOString(), tenantId: tenant.id, provider: provider.name, format: "anthropic", tag, endUser,
+    endUserLabel: tenant.policy.storeEndUserIds && rawUser ? String(rawUser).slice(0, 64) : null, plan: sanitizeTag(req.headers["x-wastezero-plan"]),
     requestedModel: body.model, fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
     maxTokens: Number(body.max_tokens) || null
   };
@@ -687,6 +839,30 @@ async function handleAdmin(ctx, req, res, url) {
   const body = () => readJson(req, 65536);
   const tenantOr404 = (id) => { const t = ctx.tenants.get(id); if (!t) throw httpError(404, "Customer not found"); return t; };
 
+  let match;
+  if (m === "GET" && p === "/admin/overview") return send(res, 200, await adminOverview(ctx));
+  if (m === "GET" && p === "/admin/team") return send(res, 200, await teamStatus(ctx));
+  if (m === "POST" && p === "/admin/agents/run") {
+    const b = await body();
+    return send(res, 200, await runAgents(ctx, { agents: {}, escalations: [] }, { only: b.agent || null }));
+  }
+  if (m === "POST" && p === "/admin/brief") {
+    const brief = await writeBrief(ctx);
+    ctx.company.m.briefs = [...ctx.company.m.briefs, brief].slice(-60);
+    await ctx.company.memory.save();
+    return send(res, 200, { brief });
+  }
+  match = p.match(/^\/admin\/tasks\/([\w-]+)\/(approve|decline|done)$/);
+  if (m === "POST" && match) {
+    const b = await body();
+    try {
+      if (match[2] === "approve") return send(res, 200, { task: await approveTask(ctx, match[1], { edits: b.edits || null }) });
+      const t = await ctx.company.updateTask(match[1], { status: match[2] === "decline" ? "declined" : "done" });
+      if (!t) throw httpError(404, "Task not found");
+      await note(ctx, { actor: "admin", level: "info", action: `task_${match[2]}`, message: `${match[2] === "decline" ? "Declined" : "Done"}: ${t.title}` });
+      return send(res, 200, { task: t });
+    } catch (error) { throw error.status ? error : httpError(400, error.message); }
+  }
   if (m === "GET" && p === "/admin/tenants") return send(res, 200, { tenants: ctx.tenants.listPublic() });
   if (m === "POST" && p === "/admin/tenants") {
     const b = await body();
@@ -696,7 +872,7 @@ async function handleAdmin(ctx, req, res, url) {
       return send(res, 201, { ...created, note: "Store apiKey now; it is not shown again." });
     } catch (error) { throw httpError(400, error.message); }
   }
-  let match = p.match(/^\/admin\/tenants\/([\w-]+)$/);
+  match = p.match(/^\/admin\/tenants\/([\w-]+)$/);
   if (m === "PATCH" && match) {
     const b = await body();
     try {
@@ -786,7 +962,7 @@ async function handleAdmin(ctx, req, res, url) {
       if (!isPeriod(period)) throw httpError(400, "period must be YYYY-MM");
       const tenant = tenantOr404(tenantId);
       const issued = latestInvoices(await ctx.invoices.all()).find((i) => i.tenantId === tenantId && i.period === period);
-      const invoice = issued || { id: "preview", ...computeInvoice({ events: await ctx.events.all(), tenant, period }), reconciliation: null, status: "preview" };
+      const invoice = issued || { id: "preview", ...computeInvoice({ events: await ctx.events.all(), tenant, period, usage: ctx.config.billing }), reconciliation: null, status: "preview" };
       return q("format") === "html" ? sendHtml(res, renderInvoiceHtml(invoice, { payUrl: tenant.billing?.status === "card_on_file" ? "" : cardSetupUrl(ctx, tenant) })) : send(res, 200, { invoice });
     }
     return send(res, 200, { invoices: latestInvoices(await ctx.invoices.all()).filter((i) => !tenantId || i.tenantId === tenantId) });
@@ -798,7 +974,7 @@ async function handleAdmin(ctx, req, res, url) {
     if (!Number.isFinite(b.providerBilledUsd) || b.providerBilledUsd < 0) throw httpError(400, "providerBilledUsd must be a non-negative number");
     const current = latestInvoices(await ctx.invoices.all()).find((i) => i.tenantId === tenant.id && i.period === b.period);
     if (current && ["paid", "charging", "pending"].includes(current.status)) throw httpError(409, `Invoice ${current.id} is ${current.status}; it cannot be reissued`);
-    const computed = computeInvoice({ events: await ctx.events.all(), tenant, period: b.period });
+    const computed = computeInvoice({ events: await ctx.events.all(), tenant, period: b.period, usage: ctx.config.billing });
     const rec = reconcile({ invoice: computed, providerBilledUsd: b.providerBilledUsd, tolerancePct: ctx.config.reconcileTolerancePct });
     const invoice = issueInvoice(computed, rec);
     await ctx.invoices.add(invoice);

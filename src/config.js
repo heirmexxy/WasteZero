@@ -1,4 +1,5 @@
 import { loadProviders } from "./providers.js";
+import { loadOffers } from "./offers.js";
 
 function number(env, name, fallback, { min = 0, max = Infinity, integer = true } = {}) {
   const raw = env[name];
@@ -51,6 +52,7 @@ export function loadConfig(env = process.env) {
     bootstrapTenantKey: env.WASTEZERO_API_KEY || "",
     providers,
     defaultProvider,
+    offers: loadOffers(env, providers),
     // WasteZero's own key on the default provider (quality grading, prospecting).
     upstreamKey: providers[defaultProvider].serverKey,
     upstreamBaseUrl: providers[defaultProvider].openaiBaseUrl,
@@ -74,6 +76,8 @@ export function loadConfig(env = process.env) {
   config.publicBaseUrl = (env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
   config.signupEnabled = bool("SIGNUP_ENABLED", Boolean(config.publicBaseUrl));
   config.signingSecret = env.SIGNING_SECRET || "";
+  config.operatorName = env.OPERATOR_NAME || "";
+  config.contactEmail = env.CONTACT_EMAIL || "";
 
   // Card billing.
   config.billing = {
@@ -89,11 +93,35 @@ export function loadConfig(env = process.env) {
     requireReconciliation: bool("BILLING_REQUIRE_RECONCILIATION", true),
     autoCharge: bool("BILLING_AUTO_CHARGE", true),
     maxAttempts: number(env, "BILLING_MAX_ATTEMPTS", 3, { min: 1, max: 10 }),
-    retryHours: number(env, "BILLING_RETRY_HOURS", 72, { min: 1 })
+    retryHours: number(env, "BILLING_RETRY_HOURS", 72, { min: 1 }),
+    // When customer traffic runs on WasteZero's own provider keys, bill that usage on the invoice.
+    billUsage: bool("BILL_USAGE", true),
+    usageMarkupPct: number(env, "USAGE_MARKUP_PCT", 0, { min: 0, max: 100, integer: false })
   };
   if (!["none", "stripe", "paystack"].includes(config.billing.provider)) throw new Error("PAYMENT_PROVIDER must be none, stripe or paystack");
   if (config.billing.provider === "stripe" && !config.billing.stripeSecretKey) throw new Error("STRIPE_SECRET_KEY is required when PAYMENT_PROVIDER=stripe");
   if (config.billing.provider === "paystack" && !config.billing.paystackSecretKey) throw new Error("PAYSTACK_SECRET_KEY is required when PAYMENT_PROVIDER=paystack");
+
+  // AI co-workers.
+  config.agents = {
+    enabled: bool("AGENTS_ENABLED", true),
+    model: env.AGENT_MODEL || config.judgeModel,
+    dailyBudgetUsd: number(env, "AGENT_DAILY_BUDGET_USD", 5, { min: 0, max: 10000, integer: false }),
+    founderEmail: env.FOUNDER_EMAIL || "",
+    briefHourUtc: number(env, "BRIEF_HOUR_UTC", 6, { min: 0, max: 23 }),
+    inboxSecret: env.INBOX_SECRET || "",
+    inboxAutoReply: bool("INBOX_AUTO_REPLY", false),
+    reliabilityIntervalMs: number(env, "RELIABILITY_INTERVAL_MS", 300000, { min: 0 })
+  };
+
+  // Telegram alerts with Pause / Resume buttons.
+  config.telegram = {
+    botToken: env.TELEGRAM_BOT_TOKEN || "",
+    botUsername: (env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, ""),
+    webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || "",
+    adminChatId: env.TELEGRAM_ADMIN_CHAT_ID || "",
+    apiBase: (env.TELEGRAM_API_BASE || "https://api.telegram.org").replace(/\/+$/, "")
+  };
 
   // Email (invoices and outreach).
   config.email = {
@@ -122,7 +150,10 @@ export function loadConfig(env = process.env) {
     discoverEveryHours: number(env, "PROSPECT_DISCOVER_EVERY_HOURS", 24, { min: 1 })
   };
 
-  if (config.adminKey && config.adminKey.length < 24)throw new Error("WASTEZERO_ADMIN_KEY must be at least 24 characters");
+  for (const [alias, list] of Object.entries(config.offers)) {
+    for (const o of list) if (!modelRates[o.model]) throw new Error(`MODEL_OFFERS_JSON.${alias}: add a price for ${o.model} to MODEL_RATES_JSON`);
+  }
+  if (config.adminKey && config.adminKey.length < 24) throw new Error("WASTEZERO_ADMIN_KEY must be at least 24 characters");
   if (config.adminKey && config.adminKey === config.bootstrapTenantKey) throw new Error("WASTEZERO_ADMIN_KEY must differ from WASTEZERO_API_KEY");
   return config;
 }

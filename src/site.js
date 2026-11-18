@@ -3,34 +3,14 @@ import { parseUsage, fetchOpenAIUsage, auditReport } from "./audit.js";
 import { note } from "./operator.js";
 import { escapeHtml, median, clientIp } from "./util.js";
 import { DEFAULT_POLICY } from "./tenants.js";
+import { layout } from "./ui.js";
 
 // Public website: landing page, free audit, public stats.
 export const SITE_PATHS = new Set(["/", "/audit", "/stats"]);
 
-const STYLE = `
-:root{--ink:#14161b;--muted:#5b6170;--line:#e3e5ea;--accent:#0b7a53;--bg:#fbfbf9}
-*{box-sizing:border-box}body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif;color:var(--ink);background:var(--bg)}
-main{max-width:880px;margin:0 auto;padding:40px 22px 80px}
-h1{font-size:clamp(30px,5vw,46px);line-height:1.12;margin:18px 0 14px;letter-spacing:-.02em}
-h2{font-size:22px;margin:44px 0 10px}h3{font-size:17px;margin:0 0 4px}
-p{margin:0 0 12px}.muted{color:var(--muted)}.small{font-size:14px}
-.btn{display:inline-block;padding:12px 20px;border-radius:8px;background:var(--ink);color:#fff;text-decoration:none;font-weight:600;border:0;font:inherit;cursor:pointer}
-.btn.alt{background:transparent;color:var(--ink);border:1.5px solid var(--ink)}
-.row{display:flex;gap:12px;flex-wrap:wrap;margin:22px 0}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
-.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px}
-.stat{font-size:30px;font-weight:700;letter-spacing:-.01em}
-.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;background:#eef6f2;color:var(--accent);font-weight:600}
-.tag.est{background:#f3f1ea;color:#7a5b0b}
-nav{display:flex;justify-content:space-between;align-items:center}nav a{color:var(--ink);text-decoration:none;font-weight:600}
-label{display:block;font-weight:600;margin:16px 0 6px}input,textarea,select{width:100%;padding:10px;border:1px solid #c9ccd4;border-radius:8px;font:inherit;background:#fff}
-textarea{min-height:120px;font-family:ui-monospace,monospace;font-size:13px}.err{color:#b42318}
-.finding{border-left:4px solid var(--accent);padding:12px 16px;margin:12px 0;background:#fff;border-radius:0 8px 8px 0}
-.money{font-weight:700;font-size:18px}code{background:#eef0f3;padding:1px 5px;border-radius:4px;font-size:14px}`;
 
-const page = (title, body, desc = "") => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(title)}</title>${desc ? `<meta name="description" content="${escapeHtml(desc)}">` : ""}<style>${STYLE}</style></head>
-<body><main><nav><a href="/">WasteZero</a><span class="small"><a href="/audit">Free audit</a> &nbsp; <a href="/signup">Sign up</a></span></nav>${body}</main></body></html>`;
+
+const page = (title, body, desc = "", active = "") => layout(title, body, { desc, active });
 
 function sendHtml(res, status, html) {
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -52,7 +32,7 @@ export async function publicStats(ctx) {
     requestsProtected: events.filter((e) => e.blocked).length,
     overheadMsP50: sorted.length ? median(sorted) : null,
     overheadMsP95: sorted.length ? sorted[Math.floor(sorted.length * 0.95)] : null,
-    customers: ctx.tenants.list().length
+    customers: ctx.tenants.listCustomers().length
   };
   statsCache = { at: Date.now(), value };
   return value;
@@ -64,7 +44,7 @@ function landing(stats) {
   <div class="card"><div class="stat">${money(stats.totalSavedUsd)}</div><div class="muted small">saved for customers so far</div></div>
   <div class="card"><div class="stat">${stats.requestsOptimized.toLocaleString()}</div><div class="muted small">requests made cheaper</div></div>
   ${stats.overheadMsP50 != null ? `<div class="card"><div class="stat">${Math.round(stats.overheadMsP50)} ms</div><div class="muted small">median delay WasteZero adds (p95 ${Math.round(stats.overheadMsP95)} ms)</div></div>` : ""}</div>` : "";
-  return page("WasteZero — find where your AI money leaks", `
+  return layout("WasteZero — find where your AI money leaks", `
 <h1>Find where your AI money leaks.<br>Fix it without hurting quality.<br>Pay only from what we save.</h1>
 <p class="muted" style="font-size:18px;max-width:640px">WasteZero sits between your app and your AI model provider. It shows which feature, customer and prompt is burning money, stops runaway spend, and cuts waste with fixes it proves on your own traffic first.</p>
 <div class="row"><a class="btn" href="/audit">Get a free waste audit</a><a class="btn alt" href="/signup">Start observe-only</a></div>
@@ -93,7 +73,7 @@ ${proof}
 <li>Nothing changes without your written consent. Every automated decision is logged.</li>
 </ul>
 <div class="row"><a class="btn" href="/audit">Get a free waste audit</a></div>`,
-  "WasteZero finds where your AI model spend leaks, fixes it without hurting quality, and only charges from verified savings.");
+  { desc: "WasteZero finds where your AI model spend leaks, fixes it without hurting quality, and only charges from verified savings.", active: "/" });
 }
 
 function auditForm(error = "") {

@@ -33,3 +33,11 @@ export function inWindow(events, { from, to, tenantId } = {}) {
   return events.filter((e) => (!tenantId || e.tenantId === tenantId) &&
     (!from || e.timestamp >= from) && (!to || e.timestamp < to));
 }
+
+/** Every request in the period with its cost, what it would have cost, and the saving. No prompt content. */
+export function statementCsv(events, tenantId, period) {
+  const cols = ["timestamp", "provider", "tag", "requestedModel", "servedModel", "optimization", "status", "promptTokens", "cachedTokens", "completionTokens", "actualCostUsd", "baselineCostUsd", "savingsUsd"];
+  const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const rows = events.filter((e) => e.tenantId === tenantId && e.timestamp?.startsWith(period)).map((e) => cols.map((c) => esc(e[c])).join(","));
+  return [cols.join(","), ...rows].join("\n") + "\n";
+}

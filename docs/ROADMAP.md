@@ -1,3 +1,11 @@
+## Shipped in 0.7.0
+- Customer dashboard, admin console, sign-in (email link / API key), multi-key management
+- Approvals with quality samples, profit per customer, month-end forecast, Telegram alerts
+- Cheapest provider with failover; usage billing
+- AI team: Chief of Staff, Prospector, Onboarding, Inbox, Reliability, Billing — human approves money, contracts and irreversible actions
+- Dogfooding: WasteZero's own AI calls run through WasteZero
+- Brand kit
+
 # Roadmap
 
 ## 0.4.0 — the full loop (this release)

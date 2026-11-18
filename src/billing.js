@@ -9,13 +9,14 @@ import { round, escapeHtml } from "./util.js";
  * original model was never called; tokenisers differ slightly between models.
  * Losses net against gains, and the fee is never below zero.
  */
-export function computeInvoice({ events, tenant, period }) {
+export function computeInvoice({ events, tenant, period, usage = null }) {
   const rows = events.filter((e) => e.tenantId === tenant.id && e.timestamp?.startsWith(period) && e.status >= 200 && e.status < 300);
-  let actualCostUsd = 0, baselineCostUsd = 0, savingsUsd = 0, optimizedCalls = 0, unpricedOptimizedCalls = 0;
+  let actualCostUsd = 0, baselineCostUsd = 0, savingsUsd = 0, optimizedCalls = 0, unpricedOptimizedCalls = 0, wzKeyCostUsd = 0;
   const byOptimization = {};
   for (const e of rows) {
     actualCostUsd += e.actualCostUsd ?? 0;
     baselineCostUsd += e.baselineCostUsd ?? e.actualCostUsd ?? 0;
+    if (e.keySource === "wastezero") wzKeyCostUsd += e.actualCostUsd ?? 0;
     if (!e.optimization) continue;
     optimizedCalls++;
     if (e.savingsUsd == null) { unpricedOptimizedCalls++; continue; }
@@ -28,12 +29,14 @@ export function computeInvoice({ events, tenant, period }) {
   const feePct = tenant.policy.revenueSharePct;
   const feeUsd = round(Math.max(0, savingsUsd) * feePct / 100, 2);
   const baseFeeUsd = round(tenant.policy.monthlyBaseFeeUsd || 0, 2);
+  // AI usage that ran on WasteZero's own provider keys is passed through at cost (+ any markup).
+  const usageUsd = usage?.billUsage ? round(wzKeyCostUsd * (1 + (usage.usageMarkupPct || 0) / 100), 2) : 0;
   return {
     tenantId: tenant.id, tenantName: tenant.name, period,
     calls: rows.length, optimizedCalls, unpricedOptimizedCalls,
     actualCostUsd: round(actualCostUsd, 6), baselineCostUsd: round(baselineCostUsd, 6),
     savingsUsd: round(savingsUsd, 6), byOptimization,
-    feePct, feeUsd, baseFeeUsd, totalUsd: round(feeUsd + baseFeeUsd, 2)
+    feePct, feeUsd, baseFeeUsd, usageUsd, totalUsd: round(feeUsd + baseFeeUsd + usageUsd, 2)
   };
 }
 
@@ -82,7 +85,7 @@ th{font-weight:600}.total{font-size:20px;font-weight:700}.muted{color:#666;font-
 Customer: ${escapeHtml(inv.tenantName)}<br>Period: ${escapeHtml(inv.period)}</p>
 <table><tr><th>Saving</th><th>Requests</th><th>Saved</th></tr>${rows || '<tr><td colspan="3">No optimised requests this period</td></tr>'}</table>
 <p>Without WasteZero: ${usd(inv.baselineCostUsd, 4)} · Actual: ${usd(inv.actualCostUsd, 4)} · <strong>Saved: ${usd(inv.savingsUsd, 4)}</strong></p>
-<p>Savings share (${inv.feePct}% of savings): ${usd(inv.feeUsd)}${inv.baseFeeUsd ? `<br>Monthly subscription: ${usd(inv.baseFeeUsd)}` : ""}</p>
+<p>Savings share (${inv.feePct}% of savings): ${usd(inv.feeUsd)}${inv.baseFeeUsd ? `<br>Monthly subscription: ${usd(inv.baseFeeUsd)}` : ""}${inv.usageUsd ? `<br>AI usage on WasteZero's provider keys, at cost: ${usd(inv.usageUsd)}` : ""}</p>
 <p class="total">Total due: ${usd(inv.totalUsd ?? inv.feeUsd)}</p>${inv.payment?.status === "paid" ? `<p><strong>Paid</strong> ${escapeHtml(inv.payment.paidAt || "")}</p>` : ""}
 ${payUrl ? `<p><a href="${escapeHtml(payUrl)}">Add or update the card to pay this invoice</a></p>` : ""}
 <p class="muted">${escapeHtml(rec)} Savings are measured per request: the cost at the model you requested minus the cost actually incurred. Reused answers cost nothing. ${inv.unpricedOptimizedCalls ? `${inv.unpricedOptimizedCalls} optimised requests had no configured price and are excluded.` : ""}</p>

@@ -155,3 +155,10 @@ Everything lives in `/opt/wastezero/data`. Back it up daily, for example:
 tar czf /root/wastezero-$(date +%F).tgz -C /opt/wastezero data
 ```
 Keep the copies off the server.
+
+## Updating to 0.7.0
+Re-run the installer (it keeps your .env and data):
+
+    curl -fsSL https://raw.githubusercontent.com/heirmexxy/wastezero/main/deploy/install.sh | bash
+
+Then set `FOUNDER_EMAIL`, an AI key (e.g. `OPENAI_API_KEY`) and optionally `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` in `/opt/wastezero/.env`, and run `systemctl restart wastezero`.

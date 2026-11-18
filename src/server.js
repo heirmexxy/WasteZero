@@ -18,7 +18,15 @@ console.log(`Providers with a WasteZero key: ${withKeys.join(", ") || "none"} (o
 const app = await createApp(config);
 app.server.listen(config.port, config.host, () => {
   console.log(`WasteZero ${VERSION} listening on http://${config.host}:${config.port}`);
+  // Dogfooding: WasteZero's own AI calls go through this server.
+  app.ctx.selfUrl = `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`;
 });
+if (config.agents.enabled && config.agents.reliabilityIntervalMs > 0) {
+  setInterval(() => app.runReliability().catch((e) => console.error("reliability check failed:", e.message)), config.agents.reliabilityIntervalMs).unref();
+}
+if (config.telegram.botToken) {
+  app.setupTelegram().then((ok) => console.log(ok ? "Telegram webhook registered" : "Telegram webhook not registered (needs an https PUBLIC_BASE_URL)"));
+}
 
 if (config.operatorIntervalMs > 0) {
   let running = false;

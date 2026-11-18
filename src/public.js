@@ -2,17 +2,11 @@ import { signToken, verifyToken, link } from "./tokens.js";
 import { applyPaymentEvent, cardSetupUrl } from "./collections.js";
 import { note } from "./operator.js";
 import { escapeHtml, clientIp } from "./util.js";
+import { layout } from "./ui.js";
 
 // Public pages: self-serve signup, card setup, unsubscribe, payment webhooks. No bearer key here.
 
-const page = (title, body) => `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(title)}</title><style>
-body{font:16px/1.55 system-ui,sans-serif;max-width:620px;margin:48px auto;padding:0 20px;color:#16181d}
-h1{font-size:26px;margin-bottom:4px}label{display:block;margin:14px 0 4px;font-weight:600}
-input{width:100%;padding:10px;border:1px solid #c8ccd4;border-radius:6px;font:inherit;box-sizing:border-box}
-button,.btn{display:inline-block;margin-top:18px;padding:11px 18px;background:#16181d;color:#fff;border:0;border-radius:6px;font:inherit;cursor:pointer;text-decoration:none}
-code,pre{background:#f2f3f5;border-radius:4px;padding:2px 5px;font-size:14px}pre{padding:12px;overflow:auto}
-.muted{color:#5d6370;font-size:14px}.err{color:#b42318}</style></head><body>${body}</body></html>`;
+const page = (title, body) => layout(title, body);
 
 function sendPage(res, status, title, body) {
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -39,7 +33,7 @@ function rateLimited(ip, now = Date.now()) {
 }
 
 function signupForm(ref, error = "") {
-  return `<h1>WasteZero</h1><p>Lower your AI model bill. Pay only a share of the savings we verify.</p>
+  return `<h1>Create your account</h1><p>Lower your AI model bill. Pay only a share of the savings we verify.</p>
 <p class="muted">You start in observe-only mode: WasteZero measures your spend and shows where the waste is. Nothing about your traffic changes until you approve it.</p>
 ${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
 <form method="post" action="/signup"><input type="hidden" name="ref" value="${escapeHtml(ref)}">
@@ -47,7 +41,8 @@ ${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
 <label for="email">Billing email</label><input id="email" name="email" type="email" required>
 <label for="website">Website</label><input id="website" name="website" placeholder="example.com" maxlength="200">
 <input name="company_url" style="display:none" tabindex="-1" autocomplete="off">
-<button type="submit">Create account</button></form>`;
+<button class="btn" type="submit">Create account</button></form>
+<p class="small muted" style="margin-top:18px">Already have an account? <a href="/signin">Sign in</a></p>`;
 }
 
 export async function handlePublic(ctx, req, res, url) {

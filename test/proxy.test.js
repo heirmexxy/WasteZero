@@ -79,6 +79,7 @@ test("streaming: usage is captured, the extra usage chunk is hidden unless asked
 test("without consent nothing is optimised; the operator asks instead", async () => {
   const s = await customer();
   for (let i = 0; i < 60; i++) await s.chat(s.key, ask(`q${i % 20}`));
+  await waitFor(async () => (await s.ctx.events.all()).length === 60);
   const report = (await s.admin("POST", "/admin/operator/run")).json;
   assert.equal(report.proposals.length, 2);
   assert.ok(report.escalations.every((e) => /not allowed/.test(e.message)));
@@ -95,6 +96,7 @@ test("full loop: detect → test → go live → save → audit → roll back �
 
   // 1. Observe: 60 calls, 20 distinct questions asked 3 times each, short answers on an expensive model.
   for (let i = 0; i < 60; i++) await s.chat(s.key, ask(`q${i % 20}`));
+  await waitFor(async () => (await s.ctx.events.all()).length === 60);
   let report = (await s.admin("POST", "/admin/operator/run")).json;
   assert.deepEqual(report.proposals.map((p) => p.type).sort(), ["cache", "route"]);
   const states = () => Object.fromEntries(s.ctx.rules.forTenant(s.tenantId).map((r) => [r.type, r.state]));

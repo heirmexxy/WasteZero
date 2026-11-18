@@ -55,7 +55,7 @@ test("stripe: invoice emailed with card link, card saved by webhook, card charge
   let report = await s.app.runOperator();
   assert.equal(report.invoices[0].period, period);
   assert.equal(report.collections[0].status, "awaiting_card");
-  const [mail] = await s.ctx.outbox.all();
+  const mail = (await s.ctx.outbox.all()).find((m) => m.kind === "invoice");
   assert.equal(mail.to, "billing@acme.test");
   assert.match(mail.html, /Total due: \$249\.00/);
   assert.match(mail.html, /http:\/\/wz\.test\/billing\/setup\?token=/);
@@ -118,7 +118,7 @@ test("billing waits for reconciliation when required", async () => {
   const period = await seedSavings(s, created.tenant.id, 100);
   let report = await s.app.runOperator();
   assert.equal(report.collections.length, 0);
-  assert.equal((await s.ctx.outbox.all()).length, 0);
+  assert.equal((await s.ctx.outbox.all()).filter((m) => m.kind === "invoice").length, 0);
   await s.admin("POST", "/admin/reconcile", { tenantId: created.tenant.id, period, providerBilledUsd: 1 });
   report = await s.app.runOperator();
   assert.equal(report.collections[0].status, "paid");

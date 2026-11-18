@@ -1,4 +1,4 @@
-# WasteZero 0.6.0
+# WasteZero 0.7.0
 ### Find where your AI money leaks. Fix it without hurting quality. Pay only from what we save.
 
 WasteZero is a proxy that sits between a customer's app and their model provider (any OpenAI-compatible chat-completions API). It records every call, finds waste, fixes it within limits the customer has agreed to, measures the saving on each request, and bills a percentage of verified savings to a saved card. An autonomous operator runs the loop and hands decisions to a human only where it should. It can also find new customers, email them, and sign them up.
@@ -7,6 +7,49 @@ WasteZero is a proxy that sits between a customer's app and their model provider
 find customers → sign up (observe-only) → measure spend → find waste → test the fix on real traffic
       → go live if quality holds → watch quality, roll back if it slips → invoice % of savings → charge card
 ```
+
+## New in 0.7.0: a company that runs itself, with a human on the money
+
+**Customers and the founder now have real dashboards.**
+- Every page has a header and nav. Returning customers sign in by email link or API key at `/signin`.
+- Customer dashboard at `/app` has these tabs:
+  - overview and month-end forecast;
+  - savings and waste;
+  - **approvals with side-by-side quality samples**;
+  - **profit per customer/plan**;
+  - protection settings;
+  - API keys (create, rotate, revoke);
+  - invoices and card;
+  - setup.
+- Admin console at `/console` covers:
+  - overview, including what WasteZero spends on its own AI;
+  - the AI team and the daily brief;
+  - customers and their policies;
+  - approvals;
+  - invoices (reconcile, mark paid);
+  - prospects;
+  - the activity log.
+- Pricing, docs, privacy, terms and contact pages.
+
+**The AI team.** The operator runs these agents on every cycle:
+- **Chief of Staff**: sets weekly goals and emails a daily brief (and sends it on Telegram).
+- **Prospector**: finds and qualifies leads, then drafts outreach.
+- **Onboarding**: nudges signups to their first request.
+- **Inbox**: triages the contact form and inbound email, then drafts replies.
+- **Reliability**: watches provider errors and latency, and opens incidents.
+- **Billing**: invoices and collects.
+
+Every decision is logged. **Money, contracts and anything that can't be undone stay with a human.** Outbound emails, refunds, mark-paid and policy changes wait in Approvals until you approve them.
+
+**The physician heals itself.** All of WasteZero's own AI calls go through WasteZero, on an internal account with per-agent budgets, caching and routing. Grader calls are never downgraded. The console shows its own spend and savings.
+
+**Moat features**
+- Cheapest healthy provider with automatic failover (`MODEL_OFFERS_JSON`).
+- Telegram alerts with Pause/Resume buttons.
+- End-of-month spend forecasts.
+- Usage billing at cost plus a markup (`BILL_USAGE`, `USAGE_MARKUP_PCT`) for customers who use WasteZero's keys.
+
+**Brand.** Logo, favicon and social images are in `brand/`. See `brand/BRAND-KIT.md`.
 
 ## New in 0.6.0: works with any major AI provider
 - **Multiple providers at once:** OpenAI, Anthropic, Gemini, Kimi (Moonshot), DeepSeek, OpenRouter, and any other OpenAI- or Anthropic-compatible provider you add in `PROVIDERS_JSON`.

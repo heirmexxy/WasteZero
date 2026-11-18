@@ -11,7 +11,7 @@ const JUDGE_SYSTEM = [
 
 const truncate = (s, n) => (s.length > n ? s.slice(0, n) + "\n[...truncated]" : s);
 
-function answerText(choice) {
+export function answerText(choice) {
   const content = choice?.message?.content;
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map((p) => p?.text || "").join("");
@@ -58,7 +58,7 @@ export async function judge({ callModel, judgeModel, rates, body, reference, can
       { role: "system", content: JUDGE_SYSTEM },
       { role: "user", content: `REQUEST MESSAGES (JSON):\n${request}\n\nREFERENCE ANSWER:\n${truncate(answerText(reference.choices?.[0]), 6000)}\n\nCANDIDATE ANSWER:\n${truncate(answerText(candidate.choices?.[0]), 6000)}` }
     ]
-  });
+  }, { tag: "grader", purpose: "eval" });
   const costUsd = res.ok ? (estimateCost(res.data?.model || judgeModel, res.data?.usage, rates) ?? 0) : 0;
   if (!res.ok) return { ok: false, costUsd };
   try {
@@ -80,7 +80,7 @@ export async function runEvaluation(ctx, { tenant, rule, mode, body, primary, ca
   const { config } = ctx;
   const otherModel = mode === "shadow" ? rule.target : rule.match.model;
   // callOther speaks the request's own format (e.g. Anthropic Messages) and returns an OpenAI-shaped answer.
-  const other = await (callOther || ctx.callModel)({ ...body, model: otherModel, stream: false, stream_options: undefined });
+  const other = await (callOther || ((b) => ctx.callModel(b, { tag: "quality-test", purpose: "eval" })))({ ...body, model: otherModel, stream: false, stream_options: undefined });
   let spend = other.ok ? (estimateCost(other.data?.model || otherModel, other.data?.usage, config.modelRates) ?? 0) : 0;
   if (!other.ok) {
     ctx.budget.add(tenant.id, spend);
@@ -101,6 +101,18 @@ export async function runEvaluation(ctx, { tenant, rule, mode, body, primary, ca
   const candidateCostUsd = estimateCost(candidate.model || rule.target, candidate.usage, config.modelRates);
   ctx.budget.add(tenant.id, spend);
   await ctx.rules.recordEval(rule.id, mode, { passed: verdict.passed, evalSpendUsd: spend, referenceCostUsd, candidateCostUsd });
+  if (tenant.policy.keepTestSamples) {
+    // Only with the customer's opt-in: a few example pairs to show side by side in the dashboard.
+    const lastUser = [...(body.messages || [])].reverse().find((m) => m.role === "user");
+    const ask = typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? "");
+    await ctx.rules.addSample(rule.id, {
+      at: new Date().toISOString(), mode, passed: verdict.passed, score: verdict.score ?? null, method: verdict.method,
+      request: ask.slice(0, 600),
+      original: answerText(reference.choices?.[0]).slice(0, 1500), originalModel: reference.model || rule.match.model,
+      cheaper: answerText(candidate.choices?.[0]).slice(0, 1500), cheaperModel: candidate.model || rule.target,
+      originalCostUsd: referenceCostUsd, cheaperCostUsd: candidateCostUsd
+    });
+  }
   await ctx.evals.add({
     timestamp: new Date().toISOString(), tenantId: tenant.id, ruleId: rule.id, mode,
     passed: verdict.passed, score: verdict.score ?? null, method: verdict.method,

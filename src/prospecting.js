@@ -210,7 +210,7 @@ export async function qualify(ctx, p) {
   const pc = ctx.config.prospecting;
   const evidence = JSON.stringify({ domain: p.domain, title: p.company?.title, description: p.company?.description, excerpt: p.company?.excerpt?.slice(0, 2500), source: p.source?.title });
   const res = await ctx.callModel({ model: pc.model, temperature: 0, response_format: { type: "json_object" },
-    messages: [{ role: "system", content: QUALIFY_SYSTEM }, { role: "user", content: evidence }] });
+    messages: [{ role: "system", content: QUALIFY_SYSTEM }, { role: "user", content: evidence }] }, { tag: "agent-prospector", purpose: "agent" });
   let verdict = null;
   if (res.ok) { try { verdict = JSON.parse(res.data.choices?.[0]?.message?.content || ""); } catch { /* fall through */ } }
   if (!verdict || !Number.isFinite(Number(verdict.fit))) {

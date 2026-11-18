@@ -4,7 +4,7 @@ import { analyze } from "./analyzer.js";
 import { computeInvoice, issueInvoice, latestInvoices } from "./billing.js";
 import { previousPeriod, round } from "./util.js";
 import { collect } from "./collections.js";
-import { runProspecting } from "./prospecting.js";
+import { runAgents } from "./agents.js";
 
 export const killSwitchPath = (config) => path.join(config.dataDir, "KILL_SWITCH");
 export const isHalted = (config) => !config.operatorEnabled || existsSync(killSwitchPath(config));
@@ -13,6 +13,10 @@ export const isHalted = (config) => !config.operatorEnabled || existsSync(killSw
 export async function note(ctx, entry) {
   const record = { timestamp: new Date().toISOString(), actor: "operator", ...entry };
   await ctx.audit.add(record);
+  if (record.level === "escalation" && ctx.config.telegram?.adminChatId && ctx.config.telegram.botToken) {
+    const { tgSend } = await import("./telegram.js");
+    await tgSend(ctx, ctx.config.telegram.adminChatId, `[WasteZero] ${record.message}`);
+  }
   if (record.level === "escalation" && ctx.config.escalationWebhookUrl) {
     try {
       await ctx.fetch(ctx.config.escalationWebhookUrl, {
@@ -124,10 +128,10 @@ export async function runOperator(ctx, { now = new Date() } = {}) {
       }
     }
 
-    // 4. Draft last month's invoice once.
+    // 4. Draft last month's invoice once (never for WasteZero's own account).
     const period = previousPeriod(now);
-    if (!invoices.some((i) => i.tenantId === tenant.id && i.period === period)) {
-      const computed = computeInvoice({ events, tenant, period });
+    if (!tenant.internal && !invoices.some((i) => i.tenantId === tenant.id && i.period === period)) {
+      const computed = computeInvoice({ events, tenant, period, usage: ctx.config.billing });
       if (computed.calls > 0) {
         const invoice = issueInvoice(computed);
         await ctx.invoices.add(invoice);
@@ -141,11 +145,9 @@ export async function runOperator(ctx, { now = new Date() } = {}) {
   // 5. Send and collect invoices.
   await collect(ctx, report, { now });
 
-  // 6. Find new customers.
-  if (ctx.config.prospecting.enabled) {
-    const before = report.escalations.length;
-    await runProspecting(ctx, report, { now });
-    for (const e of report.escalations.slice(before)) await note(ctx, { level: "escalation", action: "outreach_waiting", message: e.message });
-  }
+  // 6. The rest of the team: Chief of Staff, Prospector, Onboarding, Reliability.
+  const before = report.escalations.length;
+  await runAgents(ctx, report, { now });
+  for (const e of report.escalations.slice(before)) await note(ctx, { level: "escalation", action: "outreach_waiting", message: e.message });
   return report;
 }

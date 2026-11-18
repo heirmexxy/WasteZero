@@ -1,6 +1,7 @@
 import { isPrivateAddress } from "./prospecting.js";
 import dns from "node:dns/promises";
 import { median } from "./util.js";
+import { forecastMonth } from "./economics.js";
 
 /**
  * Runaway-spend protection, checked on every request before it reaches the provider.
@@ -125,7 +126,22 @@ export function checkRequest(ctx, tenant, { tag, endUser, fp }) {
 export function meterAndCheck(ctx, event) {
   ctx.meter.add(event);
   const tenant = ctx.tenants.get(event.tenantId);
-  if (tenant) spikeCheck(ctx, tenant, event);
+  if (!tenant) return;
+  spikeCheck(ctx, tenant, event);
+  forecastCheck(ctx, tenant);
+}
+
+/** Warn early when this month is heading over the monthly budget (from day 3, once a month). */
+function forecastCheck(ctx, tenant) {
+  const cap = tenant.policy.budgets.monthlyUsd;
+  if (!(cap > 0)) return;
+  const now = new Date();
+  if (now.getUTCDate() < 3) return;
+  const f = forecastMonth(ctx.meter.today(tenant.id).monthUsd, now);
+  if (f.projectedUsd != null && f.projectedUsd > cap) {
+    alertOnce(ctx, tenant, `forecast:${now.toISOString().slice(0, 7)}`,
+      `Forecast: at this rate you'll spend $${f.projectedUsd.toFixed(2)} this month, over your $${cap} monthly budget ($${f.monthToDateUsd.toFixed(2)} so far).`);
+  }
 }
 
 function spikeCheck(ctx, tenant, event) {
@@ -161,6 +177,10 @@ export function alertOnce(ctx, tenant, key, message) {
 async function deliver(ctx, tenant, message) {
   const { note } = await import("./operator.js");
   await note(ctx, { level: "escalation", tenantId: tenant.id, action: "customer_alert", message: `${tenant.name}: ${message}` });
+  if (tenant.telegramChatId != null && ctx.config.telegram?.botToken) {
+    const { tgSend, ALERT_BUTTONS } = await import("./telegram.js");
+    await tgSend(ctx, tenant.telegramChatId, `WasteZero alert for ${tenant.name}\n\n${message}`, ALERT_BUTTONS);
+  }
   const to = tenant.policy.alertEmail || tenant.billing?.email;
   if (to) await ctx.mailer.send({ kind: "alert", to, subject: `WasteZero alert: ${message.split(":")[0]}`, text: message, html: `<p>${message.replace(/[<>&]/g, "")}</p>` });
   if (tenant.policy.alertWebhookUrl && await isPublicHttps(ctx, tenant.policy.alertWebhookUrl)) {

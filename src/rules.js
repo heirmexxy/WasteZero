@@ -95,6 +95,14 @@ export class Rules {
     return rule;
   }
 
+  /** Keeps the latest few example comparisons (only stored when the customer opted in). */
+  async addSample(id, sample, max = 6) {
+    const rule = this.get(id);
+    if (!rule) return;
+    rule.samples = [...(rule.samples || []), sample].slice(-max);
+    await this.doc.save();
+  }
+
   async recordEval(id, phase, { passed, evalSpendUsd = 0, referenceCostUsd = null, candidateCostUsd = null }) {
     const rule = this.get(id);
     if (!rule) return;
