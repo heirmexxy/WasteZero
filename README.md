@@ -1,4 +1,4 @@
-# WasteZero 0.5.0
+# WasteZero 0.6.0
 ### Find where your AI money leaks. Fix it without hurting quality. Pay only from what we save.
 
 WasteZero is a proxy that sits between a customer's app and their model provider (any OpenAI-compatible chat-completions API). It records every call, finds waste, fixes it within limits the customer has agreed to, measures the saving on each request, and bills a percentage of verified savings to a saved card. An autonomous operator runs the loop and hands decisions to a human only where it should. It can also find new customers, email them, and sign them up.
@@ -7,6 +7,20 @@ WasteZero is a proxy that sits between a customer's app and their model provider
 find customers → sign up (observe-only) → measure spend → find waste → test the fix on real traffic
       → go live if quality holds → watch quality, roll back if it slips → invoice % of savings → charge card
 ```
+
+## New in 0.6.0: works with any major AI provider
+- **Multiple providers at once:** OpenAI, Anthropic, Gemini, Kimi (Moonshot), DeepSeek, OpenRouter, and any other OpenAI- or Anthropic-compatible provider you add in `PROVIDERS_JSON`.
+  - Each request goes to the right provider based on the model name, or on the `X-WasteZero-Provider` header.
+  - Customers send their own key for that provider in `X-Upstream-Authorization`.
+- **Native Anthropic Messages API** (`POST /v1/messages`). Apps using the Anthropic SDK only change their base URL.
+  - Budgets, the loop breaker, answer reuse, routing (e.g. Sonnet → Haiku, after shadow testing), streaming and per-request savings all work the same way.
+- **Automatic prompt caching for Anthropic** (consent: `allowedOptimizations: ["prompt_cache"]`). WasteZero marks parts of the prompt for caching only where they are likely to be reused, so customers don't pay extra for cache writes that never get read:
+  - a long system prompt, once it has been seen recently;
+  - the conversation so far, in multi-turn exchanges.
+  - Requests that already manage their own caching are left alone, and no saving is claimed for them.
+  - The saving booked is the full-price input cost minus the actual cost (cache reads at 0.1× and cache writes at 1.25× the input price, unless the price list says otherwise).
+- **Pricing handles each provider's cache charges:** prices for reading from and writing to the cache, and dated model names (e.g. `claude-sonnet-4-5-20250929`).
+- **Routing stays within one provider**, because the customer's key and request format belong to that provider. Switching between providers is on the roadmap.
 
 ## New in 0.5.0
 - **Free audit, no proxy needed** (`/audit`). The customer uploads a usage export or connects an OpenAI admin key (read once, never stored) and gets waste in dollars per month: model mix, unused prompt caching, batch candidates and spending spikes. Each finding is labelled *measured* or *estimated*, with its assumption stated.
@@ -137,7 +151,8 @@ Anti-spam rules for cold email differ by country (for example, CAN-SPAM in the U
 ## API
 
 **Customer** (customer key):
-- `POST /v1/chat/completions` and `GET /v1/models`
+- `POST /v1/chat/completions` (any provider) and `GET /v1/models`
+- `POST /v1/messages` (Anthropic format; authenticates with `x-api-key` like the Anthropic SDK)
 - `GET /v1/wastezero/summary`: their spend, savings and rules
 - `GET` and `PATCH /v1/wastezero/settings`, `POST /v1/wastezero/resume`
 - `GET /v1/wastezero/waste-report`
@@ -174,18 +189,20 @@ Anti-spam rules for cold email differ by country (for example, CAN-SPAM in the U
 
 ## Before taking real customers
 
-This release has been tested end to end against mock providers (45 tests). It has **not** been run against live Stripe, Paystack, Resend or OpenAI accounts. Run each one in test mode first.
+This release has been tested end to end against mock providers (59 tests). It has **not** been run against live Stripe, Paystack, Resend or OpenAI accounts. Run each one in test mode first.
 
 Still to do before scale:
 - Put HTTPS and a reverse proxy in front.
 - Move from files to a database, and run a single instance until then: answer reuse and rule files are per process.
-- Add more providers (Anthropic, Gemini) and endpoints (embeddings, Responses API).
+- Add Gemini's native API, the OpenAI Responses API, embeddings, and routing between providers.
 - Have a lawyer review the savings-share contract and the outreach practice for each market.
 
 ## Layout
 
 ```
 src/app.js          HTTP routes, proxy, admin and customer API
+src/providers.js    provider list, choosing a provider per request, keys and headers
+src/anthropic.js    automatic prompt caching, Anthropic answer conversion and errors
 src/guard.js        budgets, loop breaker, spike alerts
 src/audit.js        free audit from usage exports / OpenAI usage API
 src/waste.js        waste report on proxied traffic

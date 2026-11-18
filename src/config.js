@@ -1,3 +1,5 @@
+import { loadProviders } from "./providers.js";
+
 function number(env, name, fallback, { min = 0, max = Infinity, integer = true } = {}) {
   const raw = env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -20,8 +22,10 @@ function validateRates(rates) {
     for (const field of ["input", "output"]) {
       if (!Number.isFinite(rate?.[field]) || rate[field] < 0) throw new Error(`MODEL_RATES_JSON.${model}.${field} must be a non-negative number`);
     }
-    if (rate.cachedInput !== undefined && (!Number.isFinite(rate.cachedInput) || rate.cachedInput < 0)) {
-      throw new Error(`MODEL_RATES_JSON.${model}.cachedInput must be a non-negative number`);
+    for (const field of ["cachedInput", "cacheWriteInput"]) {
+      if (rate[field] !== undefined && (!Number.isFinite(rate[field]) || rate[field] < 0)) {
+        throw new Error(`MODEL_RATES_JSON.${model}.${field} must be a non-negative number`);
+      }
     }
   }
   return rates;
@@ -38,14 +42,18 @@ function validateDowngrades(map, rates) {
 
 export function loadConfig(env = process.env) {
   const modelRates = validateRates(json(env, "MODEL_RATES_JSON", {}));
+  const { providers, defaultProvider } = loadProviders(env);
   const config = {
     host: env.HOST || "127.0.0.1",
     trustProxy: env.TRUST_PROXY === "true",
     port: number(env, "PORT", 8787, { min: 1, max: 65535 }),
     adminKey: env.WASTEZERO_ADMIN_KEY || "",
     bootstrapTenantKey: env.WASTEZERO_API_KEY || "",
-    upstreamKey: env.OPENAI_API_KEY || "",
-    upstreamBaseUrl: (env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, ""),
+    providers,
+    defaultProvider,
+    // WasteZero's own key on the default provider (quality grading, prospecting).
+    upstreamKey: providers[defaultProvider].serverKey,
+    upstreamBaseUrl: providers[defaultProvider].openaiBaseUrl,
     openaiAdminBaseUrl: (env.OPENAI_ADMIN_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, ""),
     timeoutMs: number(env, "REQUEST_TIMEOUT_MS", 45000, { min: 1000 }),
     maxBodyBytes: number(env, "MAX_BODY_BYTES", 1048576, { min: 1024 }),

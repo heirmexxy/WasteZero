@@ -28,9 +28,15 @@
 - [x] Deployment guide and configs (systemd, Caddy or nginx), integration guide with a fallback
 - [x] Paystack card setup confirmed without a webhook
 
+## 0.6.0: works with any major AI provider (this release)
+- [x] Provider list with routing by model name or header: OpenAI, Anthropic, Gemini, Kimi, DeepSeek, OpenRouter, plus custom providers
+- [x] Native Anthropic Messages API, including streaming, with the full protection and savings pipeline
+- [x] Automatic Anthropic prompt caching, applied only where reuse is likely, with savings booked honestly
+- [x] Pricing for cache reads and writes; routing kept within one provider
+
 ## Next (before 15 December)
 1. Deploy to wastezero.tech; run Paystack/Stripe test mode and Resend for real.
-2. Anthropic Messages and OpenAI Responses API support; automatic prompt-caching layout for Anthropic.
+2. OpenAI Responses API and Gemini native API; routing between providers (with translation and shadow testing).
 3. Pull provider bills automatically for reconciliation (OpenAI costs API).
 4. Customer dashboard (spend, savings, waste report, settings, invoices).
 5. AI co-workers on a shared task board:

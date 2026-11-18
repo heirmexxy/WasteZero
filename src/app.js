@@ -7,7 +7,7 @@ import { Rules } from "./rules.js";
 import { JsonlLog } from "./store.js";
 import { ResponseCache } from "./cache.js";
 import { plan } from "./optimizer.js";
-import { estimateCost, tokensFromUsage } from "./pricing.js";
+import { estimateCost, tokensFromUsage, costForTokens } from "./pricing.js";
 import { runEvaluation, EvalBudget } from "./evaluator.js";
 import { summarize, inWindow } from "./reports.js";
 import { analyze } from "./analyzer.js";
@@ -24,11 +24,13 @@ import { CUSTOMER_EDITABLE } from "./tenants.js";
 import { wasteReport } from "./waste.js";
 import { handleSite, SITE_PATHS } from "./site.js";
 import { sha256 } from "./util.js";
+import { resolveProvider, providerKey, providerHeaders, openaiHeaders } from "./providers.js";
+import { PrefixTracker, addCacheBreakpoints, toOpenAIShape, finishReasonOf, anthropicErrorBody } from "./anthropic.js";
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 
 // Provider headers worth passing back: request IDs for support, rate-limit headers for client back-off.
-const PASSTHROUGH = /^(x-request-id|openai-|x-ratelimit-|retry-after)/i;
+const PASSTHROUGH = /^(x-request-id|request-id|openai-|x-ratelimit-|anthropic-ratelimit-|retry-after)/i;
 
 function send(res, status, body, headers = {}) {
   if (res.headersSent || res.destroyed) return;
@@ -70,6 +72,8 @@ function bearer(req) {
   const header = req.headers.authorization || "";
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 }
+/** Customer key: OpenAI-style SDKs send Authorization: Bearer, the Anthropic SDK sends x-api-key. */
+const customerApiKey = (req) => bearer(req) || String(req.headers["x-api-key"] || "").trim();
 function safeEqual(a, b) {
   const x = Buffer.from(a), y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
@@ -96,7 +100,8 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
     budget: new EvalBudget(),
     meter: new SpendMeter(),
     loops: new LoopDetector(),
-    cache: new ResponseCache({ maxEntries: config.cacheMaxEntries })
+    cache: new ResponseCache({ maxEntries: config.cacheMaxEntries }),
+    prefixes: new PrefixTracker()
   };
   await ctx.tenants.init();
   await ctx.rules.init();
@@ -106,13 +111,17 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
   ctx.budget.load(await ctx.evals.all());
   ctx.meter.load(await ctx.events.all());
 
-  /** Non-streaming call with WasteZero's own key; used for quality testing and grading. */
+  /**
+   * Non-streaming OpenAI-format call with WasteZero's own key, to whichever provider serves the model.
+   * Used for quality testing and grading.
+   */
   ctx.callModel = async (body) => {
-    if (!config.upstreamKey) return { ok: false, status: 0 };
+    const { provider } = resolveProvider(config, { model: body.model });
+    if (!provider?.serverKey) return { ok: false, status: 0 };
     try {
-      const r = await ctx.fetch(`${config.upstreamBaseUrl}/chat/completions`, {
+      const r = await ctx.fetch(`${provider.openaiBaseUrl}/chat/completions`, {
         method: "POST",
-        headers: { authorization: `Bearer ${config.upstreamKey}`, "content-type": "application/json" },
+        headers: openaiHeaders(provider.serverKey),
         body: JSON.stringify(body), signal: AbortSignal.timeout(config.timeoutMs)
       });
       const data = await r.json().catch(() => null);
@@ -149,8 +158,12 @@ async function handle(ctx, req, res) {
     return handleAdmin(ctx, req, res, url);
   }
 
-  const tenant = ctx.tenants.findByKey(bearer(req));
-  if (!tenant) return oaiError(res, 401, "invalid_api_key", "Missing or unknown WasteZero API key");
+  const tenant = ctx.tenants.findByKey(customerApiKey(req));
+  if (!tenant) {
+    if (p === "/v1/messages") return send(res, 401, anthropicErrorBody(401, "Missing or unknown WasteZero API key"));
+    return oaiError(res, 401, "invalid_api_key", "Missing or unknown WasteZero API key");
+  }
+  if (req.method === "POST" && p === "/v1/messages") return handleMessages(ctx, req, res, tenant);
 
   if (req.method === "POST" && p === "/v1/chat/completions") return handleChat(ctx, req, res, tenant);
   if (req.method === "GET" && (p === "/v1/models" || p.startsWith("/v1/models/"))) return passThroughGet(ctx, req, res, p.slice(3));
@@ -160,10 +173,12 @@ async function handle(ctx, req, res) {
 
 /** Read-only provider endpoints that SDKs and tools call on start-up (model lists). */
 async function passThroughGet(ctx, req, res, providerPath) {
-  const key = (req.headers["x-upstream-authorization"] || "").replace(/^Bearer\s+/i, "").trim() || ctx.config.upstreamKey;
-  if (!key) return oaiError(res, 503, "no_provider_key", "No provider key: send X-Upstream-Authorization or configure OPENAI_API_KEY");
+  const { provider, error } = resolveProvider(ctx.config, { header: req.headers["x-wastezero-provider"] });
+  if (error) return oaiError(res, 400, "unknown_provider", error);
+  const { key } = providerKey(req, provider);
+  if (!key) return oaiError(res, 503, "no_provider_key", `No ${provider.name} key: send X-Upstream-Authorization with your ${provider.name} key`);
   try {
-    const r = await ctx.fetch(`${ctx.config.upstreamBaseUrl}${providerPath}`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(ctx.config.timeoutMs) });
+    const r = await ctx.fetch(`${provider.openaiBaseUrl}${providerPath}`, { headers: openaiHeaders(key), signal: AbortSignal.timeout(ctx.config.timeoutMs) });
     const text = await r.text();
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") || "application/json", ...passthroughHeaders(r.headers) });
     res.end(text);
@@ -237,17 +252,37 @@ async function record(ctx, event, { metered = false } = {}) {
   catch (error) { ctx.log.error("could not record usage event:", error.message); }
 }
 
-function costs(ctx, base, servedModel, usage, routed, ok) {
+/**
+ * Cost of a request, what it would have cost without WasteZero, and the saving.
+ * Routed: baseline prices the same tokens at the model the customer asked for.
+ * Prompt caching added by WasteZero: baseline prices every input token at the full rate.
+ */
+function costs(ctx, base, servedModel, usage, routed, ok, { format = "openai", provider = null, promptCached = false } = {}) {
   const rates = ctx.config.modelRates;
-  const actual = estimateCost(servedModel, usage, rates);
-  const baseline = routed ? estimateCost(base.requestedModel, usage, rates) : actual;
-  const t = tokensFromUsage(usage);
+  const defaults = provider?.pricing || {};
+  const t = tokensFromUsage(usage, format);
+  const actual = costForTokens(servedModel, t, rates, defaults);
+  const changed = routed || promptCached;
+  const baselineTokens = promptCached ? { ...t, cached: 0, cacheWrite: 0 } : t;
+  const baseline = changed ? costForTokens(routed ? base.requestedModel : servedModel, baselineTokens, rates, defaults) : actual;
   return {
-    promptTokens: t.prompt, cachedTokens: t.cached, completionTokens: t.completion,
+    promptTokens: t.prompt, cachedTokens: t.cached, cacheWriteTokens: t.cacheWrite, completionTokens: t.completion,
     totalTokens: Number(usage?.total_tokens) || t.prompt + t.completion,
     actualCostUsd: actual, baselineCostUsd: baseline,
-    savingsUsd: routed && ok ? (actual != null && baseline != null ? Number((baseline - actual).toFixed(10)) : null) : 0
+    savingsUsd: changed && ok ? (actual != null && baseline != null ? Number((baseline - actual).toFixed(10)) : null) : 0
   };
+}
+
+/** Routing only within the same provider: the customer's key and request format belong to it. */
+function keepRoutingOnProvider(ctx, decision, provider, req) {
+  const header = req.headers["x-wastezero-provider"];
+  const sameProvider = (model) => resolveProvider(ctx.config, { model, header }).provider === provider;
+  if (decision.routeRule && !sameProvider(decision.routeRule.target)) {
+    decision.routeRule = null;
+    decision.effectiveModel = decision.requestedModel;
+  }
+  if (decision.evaluation && !sameProvider(decision.evaluation.rule.target)) decision.evaluation = null;
+  return decision;
 }
 
 async function handleChat(ctx, req, res, tenant) {
@@ -263,10 +298,11 @@ async function handleChat(ctx, req, res, tenant) {
     return oaiError(res, 400, "invalid_request", "Expected a chat-completions JSON body with model and messages");
   }
 
+  const { provider, error: providerError } = resolveProvider(config, { model: body.model, header: req.headers["x-wastezero-provider"] });
+  if (providerError) return oaiError(res, 400, "unknown_provider", providerError);
   // Bring-your-own-key: the customer's provider key, so the provider bills them directly.
-  const customerKey = (req.headers["x-upstream-authorization"] || "").replace(/^Bearer\s+/i, "").trim();
-  const upstreamKey = customerKey || config.upstreamKey;
-  if (!upstreamKey) return oaiError(res, 503, "no_provider_key", "No provider key: send X-Upstream-Authorization or configure OPENAI_API_KEY");
+  const { key: upstreamKey, source: keySource } = providerKey(req, provider);
+  if (!upstreamKey) return oaiError(res, 503, "no_provider_key", `No ${provider.name} key: send X-Upstream-Authorization with your ${provider.name} key`);
 
   const tag = sanitizeTag(req.headers["x-wastezero-tag"]);
   // End users are stored as a short one-way hash, never the raw ID.
@@ -274,7 +310,7 @@ async function handleChat(ctx, req, res, tenant) {
   const endUser = rawUser ? sha256(`${tenant.id}:${rawUser}`).slice(0, 16) : null;
   const fp = fingerprint(body);
   const base = {
-    timestamp: new Date().toISOString(), tenantId: tenant.id, tag, endUser, requestedModel: body.model,
+    timestamp: new Date().toISOString(), tenantId: tenant.id, provider: provider.name, format: "openai", tag, endUser, requestedModel: body.model,
     fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
     maxTokens: Number(body.max_completion_tokens ?? body.max_tokens) || null
   };
@@ -287,26 +323,26 @@ async function handleChat(ctx, req, res, tenant) {
       actualCostUsd: 0, baselineCostUsd: 0, savingsUsd: 0, optimization: null, blocked: block.code, status: block.status, latencyMs: Date.now() - receivedAt });
     return;
   }
-  const decision = plan({ tenant, body, tag, rules: ctx.rules, evalBudgetLeftUsd: ctx.budget.left(tenant), random: ctx.random });
+  const decision = keepRoutingOnProvider(ctx, plan({ tenant, body, tag, rules: ctx.rules, evalBudgetLeftUsd: ctx.budget.left(tenant), random: ctx.random }), provider, req);
 
   // Reuse a stored answer to an identical request.
   if (decision.cacheRule) {
     const hit = ctx.cache.get(tenant.id, fp);
     if (hit) {
       send(res, 200, hit.data, { "x-wastezero-cache": "hit" });
-      const baseline = estimateCost(body.model, hit.data.usage, config.modelRates);
+      const baseline = estimateCost(body.model, hit.data.usage, config.modelRates, "openai", provider.pricing);
       const t = tokensFromUsage(hit.data.usage);
       await record(ctx, { ...base, servedModel: hit.data.model, promptTokens: t.prompt, cachedTokens: t.cached, completionTokens: t.completion,
         totalTokens: t.prompt + t.completion, actualCostUsd: 0, baselineCostUsd: baseline, savingsUsd: baseline,
-        optimization: "cache", ruleId: decision.cacheRule.id, status: 200, latencyMs: 0, keySource: customerKey ? "customer" : "wastezero" });
+        optimization: "cache", ruleId: decision.cacheRule.id, status: 200, latencyMs: 0, keySource });
       return;
     }
   }
 
   const forwarded = { ...body, model: decision.effectiveModel };
-  const meta = { ...base, optimization: decision.routeRule ? "route" : null, ruleId: decision.routeRule?.id ?? null, keySource: customerKey ? "customer" : "wastezero" };
+  const meta = { ...base, optimization: decision.routeRule ? "route" : null, ruleId: decision.routeRule?.id ?? null, keySource };
   const extraHeaders = decision.routeRule ? { "x-wastezero-routed-from": body.model } : {};
-  if (body.stream === true) return streamChat(ctx, req, res, { forwarded, body, meta, decision, upstreamKey, extraHeaders, receivedAt });
+  if (body.stream === true) return streamChat(ctx, req, res, { forwarded, body, meta, decision, upstreamKey, extraHeaders, receivedAt, provider });
 
   const started = Date.now();
   const controller = new AbortController();
@@ -314,16 +350,16 @@ async function handleChat(ctx, req, res, tenant) {
   res.on("close", () => { if (!res.writableFinished) controller.abort(); });
   let upstream, raw;
   try {
-    upstream = await ctx.fetch(`${config.upstreamBaseUrl}/chat/completions`, {
+    upstream = await ctx.fetch(`${provider.openaiBaseUrl}/chat/completions`, {
       method: "POST",
-      headers: { authorization: `Bearer ${upstreamKey}`, "content-type": "application/json" },
+      headers: openaiHeaders(upstreamKey),
       body: JSON.stringify(forwarded), signal: controller.signal
     });
     raw = await upstream.text();
   } catch (error) {
     const status = error.name === "AbortError" ? 504 : 502;
     send(res, status, { error: status === 504 ? "Upstream request timed out" : "Upstream request failed" });
-    await record(ctx, { ...meta, servedModel: decision.effectiveModel, ...costs(ctx, meta, decision.effectiveModel, {}, false, false), status, latencyMs: Date.now() - started });
+    await record(ctx, { ...meta, servedModel: decision.effectiveModel, ...costs(ctx, meta, decision.effectiveModel, {}, false, false, { provider }), status, latencyMs: Date.now() - started });
     return;
   } finally { clearTimeout(timer); }
 
@@ -334,7 +370,7 @@ async function handleChat(ctx, req, res, tenant) {
   const status = data === null && upstream.ok ? 502 : upstream.status;
   const overheadMs = Math.max(0, Date.now() - receivedAt - upstreamMs);
   const servedModel = data?.model || decision.effectiveModel;
-  const event = { ...meta, servedModel, ...costs(ctx, meta, servedModel, data?.usage, !!decision.routeRule, ok), status,
+  const event = { ...meta, servedModel, ...costs(ctx, meta, servedModel, data?.usage, !!decision.routeRule, ok, { provider }), status,
     finishReason: data?.choices?.[0]?.finish_reason ?? null, latencyMs: Date.now() - started, overheadMs };
   if (ok && decision.cacheRule) ctx.cache.set(tenant.id, fp, { data }, tenant.policy.cacheTtlSec);
   try { meterAndCheck(ctx, event); } catch (error) { ctx.log.error("spend check failed:", error.message); }
@@ -347,7 +383,7 @@ async function handleChat(ctx, req, res, tenant) {
   }
 }
 
-async function streamChat(ctx, req, res, { forwarded, body, meta, decision, upstreamKey, extraHeaders, receivedAt }) {
+async function streamChat(ctx, req, res, { forwarded, body, meta, decision, upstreamKey, extraHeaders, receivedAt, provider }) {
   const { config } = ctx;
   const clientWantsUsage = body.stream_options?.include_usage === true;
   forwarded.stream_options = { ...(body.stream_options || {}), include_usage: true };
@@ -362,15 +398,15 @@ async function streamChat(ctx, req, res, { forwarded, body, meta, decision, upst
   let finishReason = null;
   const finish = (status, usage, servedModel) => record(ctx, {
     ...meta, servedModel: servedModel || decision.effectiveModel, finishReason, overheadMs: Math.max(0, started - receivedAt),
-    ...costs(ctx, meta, servedModel || decision.effectiveModel, usage, !!decision.routeRule, status >= 200 && status < 300 && !!usage),
+    ...costs(ctx, meta, servedModel || decision.effectiveModel, usage, !!decision.routeRule, status >= 200 && status < 300 && !!usage, { provider }),
     status, latencyMs: Date.now() - started
   });
 
   let upstream;
   try {
-    upstream = await ctx.fetch(`${config.upstreamBaseUrl}/chat/completions`, {
+    upstream = await ctx.fetch(`${provider.openaiBaseUrl}/chat/completions`, {
       method: "POST",
-      headers: { authorization: `Bearer ${upstreamKey}`, "content-type": "application/json" },
+      headers: openaiHeaders(upstreamKey),
       body: JSON.stringify(forwarded), signal: controller.signal
     });
   } catch (error) {
@@ -424,6 +460,208 @@ async function streamChat(ctx, req, res, { forwarded, body, meta, decision, upst
     res.destroy();
   } finally { clearTimeout(timer); }
   return finish(status, usage, servedModel);
+}
+
+// ---------------------------------------------------------------- Anthropic Messages (native)
+
+function anthropicError(res, status, message, headers = {}) {
+  send(res, status, anthropicErrorBody(status, message), headers);
+}
+
+/**
+ * POST /v1/messages in Anthropic's own format, so apps using the Anthropic SDK only change their base URL.
+ * Same protection, reuse, routing and accounting as chat completions, plus automatic prompt caching.
+ */
+async function handleMessages(ctx, req, res, tenant) {
+  const { config } = ctx;
+  const receivedAt = Date.now();
+  let body;
+  try { body = await readJson(req, config.maxBodyBytes); }
+  catch (error) {
+    if (error.status === 413) { anthropicError(res, 413, error.message, { connection: "close" }); req.resume(); return; }
+    return anthropicError(res, error.status || 400, error.message);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.model !== "string" || !Array.isArray(body.messages)) {
+    return anthropicError(res, 400, "Expected a Messages API JSON body with model and messages");
+  }
+
+  const header = req.headers["x-wastezero-provider"];
+  let { provider, error: providerError } = resolveProvider(config, { model: body.model, header });
+  if (providerError) return anthropicError(res, 400, providerError);
+  if (provider.format !== "anthropic") {
+    if (header) return anthropicError(res, 400, `Provider ${provider.name} does not speak the Messages API; use /v1/chat/completions`);
+    provider = config.providers.anthropic;
+    if (provider?.format !== "anthropic") return anthropicError(res, 400, "No Anthropic provider is configured");
+  }
+  const { key: upstreamKey, source: keySource } = providerKey(req, provider);
+  if (!upstreamKey) return anthropicError(res, 503, `No ${provider.name} key: send X-Upstream-Authorization with your ${provider.name} key`);
+
+  const tag = sanitizeTag(req.headers["x-wastezero-tag"]);
+  const rawUser = req.headers["x-wastezero-user"] || (typeof body.metadata?.user_id === "string" ? body.metadata.user_id : "");
+  const endUser = rawUser ? sha256(`${tenant.id}:${rawUser}`).slice(0, 16) : null;
+  const fp = fingerprint({ ...body, _wzFormat: "anthropic" });
+  const base = {
+    timestamp: new Date().toISOString(), tenantId: tenant.id, provider: provider.name, format: "anthropic", tag, endUser,
+    requestedModel: body.model, fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
+    maxTokens: Number(body.max_tokens) || null
+  };
+
+  const block = checkRequest(ctx, tenant, { tag, endUser, fp });
+  if (block) {
+    anthropicError(res, block.status, block.message);
+    await record(ctx, { ...base, servedModel: null, promptTokens: 0, cachedTokens: 0, completionTokens: 0, totalTokens: 0,
+      actualCostUsd: 0, baselineCostUsd: 0, savingsUsd: 0, optimization: null, blocked: block.code, status: block.status, latencyMs: Date.now() - receivedAt });
+    return;
+  }
+  const decision = keepRoutingOnProvider(ctx, plan({ tenant, body, tag, rules: ctx.rules, evalBudgetLeftUsd: ctx.budget.left(tenant), random: ctx.random }), provider, req);
+
+  if (decision.cacheRule) {
+    const hit = ctx.cache.get(tenant.id, fp);
+    if (hit) {
+      send(res, 200, hit.data, { "x-wastezero-cache": "hit" });
+      const baseline = estimateCost(body.model, hit.data.usage, config.modelRates, "anthropic", provider.pricing);
+      const t = tokensFromUsage(hit.data.usage, "anthropic");
+      await record(ctx, { ...base, servedModel: hit.data.model, promptTokens: t.prompt, cachedTokens: t.cached, completionTokens: t.completion,
+        totalTokens: t.prompt + t.completion, actualCostUsd: 0, baselineCostUsd: baseline, savingsUsd: baseline,
+        optimization: "cache", ruleId: decision.cacheRule.id, status: 200, latencyMs: 0, keySource });
+      return;
+    }
+  }
+
+  // Automatic prompt caching, when the customer allows it.
+  let forwarded = { ...body, model: decision.effectiveModel };
+  let promptCached = false;
+  if (tenant.policy.allowedOptimizations.includes("prompt_cache")) {
+    const r = addCacheBreakpoints(forwarded, { tenantId: tenant.id, tracker: ctx.prefixes });
+    if (r.added) { forwarded = r.body; promptCached = true; }
+  }
+
+  const meta = { ...base, optimization: decision.routeRule ? "route" : promptCached ? "prompt_cache" : null,
+    promptCacheAdded: promptCached, ruleId: decision.routeRule?.id ?? null, keySource };
+  const extraHeaders = {
+    ...(decision.routeRule ? { "x-wastezero-routed-from": body.model } : {}),
+    ...(promptCached ? { "x-wastezero-prompt-cache": "added" } : {})
+  };
+  const url = `${provider.baseUrl}/v1/messages`;
+  const headers = providerHeaders(provider, upstreamKey, req);
+  if (body.stream === true) return streamMessages(ctx, req, res, { url, headers, forwarded, meta, decision, extraHeaders, receivedAt, provider, promptCached });
+
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  res.on("close", () => { if (!res.writableFinished) controller.abort(); });
+  let upstream, raw;
+  try {
+    upstream = await ctx.fetch(url, { method: "POST", headers, body: JSON.stringify(forwarded), signal: controller.signal });
+    raw = await upstream.text();
+  } catch (error) {
+    const status = error.name === "AbortError" ? 504 : 502;
+    anthropicError(res, status, status === 504 ? "Upstream request timed out" : "Upstream request failed");
+    await record(ctx, { ...meta, servedModel: decision.effectiveModel, ...costs(ctx, meta, decision.effectiveModel, {}, false, false, { format: "anthropic", provider }), status, latencyMs: Date.now() - started });
+    return;
+  } finally { clearTimeout(timer); }
+
+  const upstreamMs = Date.now() - started;
+  let data = null;
+  try { data = JSON.parse(raw); } catch { /* handled below */ }
+  const ok = upstream.ok && data !== null;
+  const status = data === null && upstream.ok ? 502 : upstream.status;
+  const overheadMs = Math.max(0, Date.now() - receivedAt - upstreamMs);
+  const servedModel = data?.model || decision.effectiveModel;
+  const event = { ...meta, servedModel, ...costs(ctx, meta, servedModel, data?.usage, !!decision.routeRule, ok, { format: "anthropic", provider, promptCached }), status,
+    finishReason: finishReasonOf(data?.stop_reason), latencyMs: Date.now() - started, overheadMs };
+  if (ok && decision.cacheRule) ctx.cache.set(tenant.id, fp, { data }, tenant.policy.cacheTtlSec);
+  try { meterAndCheck(ctx, event); } catch (error) { ctx.log.error("spend check failed:", error.message); }
+  send(res, status, data ?? anthropicErrorBody(502, "Provider returned a non-JSON response"), { ...passthroughHeaders(upstream.headers), ...extraHeaders, "x-wastezero-overhead-ms": String(overheadMs) });
+  await record(ctx, event, { metered: true });
+  if (ok && decision.evaluation) {
+    runEvaluation(ctx, { tenant, rule: decision.evaluation.rule, mode: decision.evaluation.mode, body, primary: toOpenAIShape(data),
+      callOther: (b) => callAnthropic(ctx, provider, b) })
+      .catch((error) => ctx.log.error("evaluation failed:", error.message));
+  }
+}
+
+/** Native Anthropic call with WasteZero's own key, answer converted for comparison. Used by quality tests. */
+async function callAnthropic(ctx, provider, body) {
+  if (!provider.serverKey) return { ok: false, status: 0 };
+  try {
+    const r = await ctx.fetch(`${provider.baseUrl}/v1/messages`, {
+      method: "POST", headers: providerHeaders(provider, provider.serverKey),
+      body: JSON.stringify({ ...body, stream: false }), signal: AbortSignal.timeout(ctx.config.timeoutMs)
+    });
+    const data = await r.json().catch(() => null);
+    return { ok: r.ok && !!data, status: r.status, data: data ? toOpenAIShape(data) : null };
+  } catch { return { ok: false, status: 0 }; }
+}
+
+async function streamMessages(ctx, req, res, { url, headers, forwarded, meta, decision, extraHeaders, receivedAt, provider, promptCached }) {
+  const { config } = ctx;
+  const started = Date.now();
+  const controller = new AbortController();
+  let timer;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => controller.abort(), config.timeoutMs); };
+  arm();
+  res.on("close", () => { if (!res.writableFinished) controller.abort(); });
+
+  const usage = {};
+  let servedModel = null, stopReason = null, sawUsage = false;
+  const finish = (status) => record(ctx, {
+    ...meta, servedModel: servedModel || decision.effectiveModel, finishReason: finishReasonOf(stopReason), overheadMs: Math.max(0, started - receivedAt),
+    ...costs(ctx, meta, servedModel || decision.effectiveModel, sawUsage ? usage : null, !!decision.routeRule,
+      status >= 200 && status < 300 && sawUsage, { format: "anthropic", provider, promptCached }),
+    status, latencyMs: Date.now() - started
+  });
+
+  let upstream;
+  try {
+    upstream = await ctx.fetch(url, { method: "POST", headers, body: JSON.stringify(forwarded), signal: controller.signal });
+  } catch (error) {
+    clearTimeout(timer);
+    const status = error.name === "AbortError" ? 504 : 502;
+    anthropicError(res, status, status === 504 ? "Upstream request timed out" : "Upstream request failed");
+    return finish(status);
+  }
+  const contentType = upstream.headers.get("content-type") || "";
+  if (!upstream.ok || !contentType.includes("text/event-stream")) {
+    const raw = await upstream.text().catch(() => "");
+    clearTimeout(timer);
+    if (!res.headersSent) { res.writeHead(upstream.status, { "content-type": contentType || "application/json", ...passthroughHeaders(upstream.headers), ...extraHeaders }); res.end(raw); }
+    return finish(upstream.status);
+  }
+
+  res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive", ...passthroughHeaders(upstream.headers), ...extraHeaders });
+  let buffer = "", status = 200;
+  const decoder = new TextDecoder();
+  const read = (event) => {
+    const payload = event.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+    if (!payload) return;
+    try {
+      const j = JSON.parse(payload);
+      if (j.type === "message_start" && j.message) {
+        servedModel = j.message.model || servedModel;
+        if (j.message.usage) { Object.assign(usage, j.message.usage); sawUsage = true; }
+      } else if (j.type === "message_delta") {
+        if (j.usage) { Object.assign(usage, j.usage); sawUsage = true; }
+        if (j.delta?.stop_reason) stopReason = j.delta.stop_reason;
+      }
+    } catch { /* forward untouched */ }
+  };
+  try {
+    for await (const piece of upstream.body) {
+      arm();
+      const text = decoder.decode(piece, { stream: true });
+      res.write(text);                       // pass every byte through unchanged
+      buffer = (buffer + text).replace(/\r\n/g, "\n");
+      let i;
+      while ((i = buffer.indexOf("\n\n")) !== -1) { read(buffer.slice(0, i)); buffer = buffer.slice(i + 2); }
+    }
+    if (buffer.trim()) read(buffer);
+    res.end();
+  } catch (error) {
+    status = error.name === "AbortError" ? 504 : 502;
+    res.destroy();
+  } finally { clearTimeout(timer); }
+  return finish(status);
 }
 
 // ---------------------------------------------------------------- reporting

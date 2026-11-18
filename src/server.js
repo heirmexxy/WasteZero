@@ -10,8 +10,10 @@ if (!config.adminKey) {
   process.exit(1);
 }
 if (!config.upstreamKey) {
-  console.warn("OPENAI_API_KEY is not set: customers must send their own key in X-Upstream-Authorization, and quality testing is disabled.");
+  console.warn(`No server key for the default provider (${config.defaultProvider}): customers must send their own key in X-Upstream-Authorization, and quality testing is disabled.`);
 }
+const withKeys = Object.values(config.providers).filter((p) => p.serverKey).map((p) => p.name);
+console.log(`Providers with a WasteZero key: ${withKeys.join(", ") || "none"} (others need the customer's own key)`);
 
 const app = await createApp(config);
 app.server.listen(config.port, config.host, () => {

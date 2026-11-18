@@ -76,10 +76,11 @@ export async function judge({ callModel, judgeModel, rates, body, reference, can
  * audit : customer got the candidate; we also ask the original.
  * Stores scores and costs only, never the text.
  */
-export async function runEvaluation(ctx, { tenant, rule, mode, body, primary }) {
+export async function runEvaluation(ctx, { tenant, rule, mode, body, primary, callOther = null }) {
   const { config } = ctx;
   const otherModel = mode === "shadow" ? rule.target : rule.match.model;
-  const other = await ctx.callModel({ ...body, model: otherModel, stream: false, stream_options: undefined });
+  // callOther speaks the request's own format (e.g. Anthropic Messages) and returns an OpenAI-shaped answer.
+  const other = await (callOther || ctx.callModel)({ ...body, model: otherModel, stream: false, stream_options: undefined });
   let spend = other.ok ? (estimateCost(other.data?.model || otherModel, other.data?.usage, config.modelRates) ?? 0) : 0;
   if (!other.ok) {
     ctx.budget.add(tenant.id, spend);

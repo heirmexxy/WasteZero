@@ -67,13 +67,14 @@ export function wasteReport({ events, tenant, config, rules, now = Date.now(), w
     if ((e.promptTokens || 0) < 1024) continue;
     const key = resolveRate(e.servedModel || e.requestedModel, config.modelRates)?.key;
     if (!key) continue;
-    const m = byModel.get(key) || { prompt: 0, cached: 0, n: 0 };
+    const m = byModel.get(key) || { prompt: 0, cached: 0, n: 0, anthropic: false };
     m.prompt += e.promptTokens; m.cached += e.cachedTokens || 0; m.n++;
+    if (e.format === "anthropic") m.anthropic = true;
     byModel.set(key, m);
   }
   for (const [model, m] of byModel) {
     const rate = config.modelRates[model];
-    const cachedRate = rate.cachedInput ?? rate.input;
+    const cachedRate = rate.cachedInput ?? (m.anthropic ? rate.input * 0.1 : rate.input);
     const share = m.cached / m.prompt;
     if (m.n < 20 || share >= 0.3 || cachedRate >= rate.input) continue;
     const saving = 0.5 * (m.prompt - m.cached) * (rate.input - cachedRate) / 1_000_000;
@@ -81,7 +82,9 @@ export function wasteReport({ events, tenant, config, rules, now = Date.now(), w
       kind: "prompt_caching", confidence: "estimated", monthlyUsd: monthly(saving),
       title: `Long ${model} prompts are mostly missing the provider's cache`,
       detail: `${m.n} requests with prompts over 1,024 tokens; only ${Math.round(share * 100)}% of those tokens were cached. Put the fixed parts first and the changing parts (user message, dates, IDs) last. Estimate assumes half of the uncached tokens become cacheable.`,
-      fix: "Reorder prompts: fixed instructions first"
+      fix: m.anthropic
+        ? (p.allowedOptimizations.includes("prompt_cache") ? "Automatic prompt caching is allowed; repeated prefixes are being marked" : "Allow automatic prompt caching (settings: allowedOptimizations: prompt_cache)")
+        : "Reorder prompts: fixed instructions first"
     });
   }
 

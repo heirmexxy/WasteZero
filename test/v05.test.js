@@ -137,6 +137,7 @@ test("answer reuse at any temperature for features the customer opted in", async
 test("waste report finds loops and repeats in proxied traffic; statement lists every request", async () => {
   const s = await customer();
   for (let i = 0; i < 12; i++) await s.chat(s.key, ask("loop me"));
+  await waitFor(async () => (await s.ctx.events.all()).length === 12);
   const r = (await s.call("GET", "/v1/wastezero/waste-report", { key: s.key })).json;
   const loops = r.findings.find((f) => f.kind === "loops");
   assert.equal(loops.confidence, "measured");

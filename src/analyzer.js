@@ -1,5 +1,6 @@
 import { costForTokens, resolveRate } from "./pricing.js";
 import { median, round } from "./util.js";
+import { resolveProvider } from "./providers.js";
 
 export const DEFAULTS = {
   windowDays: 14,
@@ -54,7 +55,9 @@ export function analyze({ events, tenant, config, now = Date.now(), options = {}
 
     // 2. An expensive model doing short tasks: a cheaper model may do as well.
     const rateKey = resolveRate(g.model, config.modelRates)?.key;
-    const target = rateKey && config.downgradeMap[rateKey];
+    let target = rateKey && config.downgradeMap[rateKey];
+    // Only propose a cheaper model from the same provider: the customer's key and request format belong to it.
+    if (target && config.providers && resolveProvider(config, { model: g.model }).provider !== resolveProvider(config, { model: target }).provider) target = null;
     if (target && good.length >= o.minRouteCalls) {
       const medianOut = median(good.map((e) => e.completionTokens || 0));
       let current = 0, cheaper = 0;

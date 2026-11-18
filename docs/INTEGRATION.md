@@ -1,5 +1,7 @@
 # Connecting your app to WasteZero
 
+WasteZero works with OpenAI, Anthropic, Gemini, Kimi (Moonshot), DeepSeek, OpenRouter and any other provider WasteZero is set up for. Keep your provider's SDK and change only the base URL.
+
 There are two changes: point the base URL at WasteZero, and keep your own provider key in a header. Your provider keeps billing you directly.
 
 ## Python (fallback included)
@@ -54,12 +56,46 @@ export async function chat(feature, params) {
 ### Why the fallback?
 If WasteZero is ever unreachable, your app keeps working by going straight to the provider. The fallback deliberately does **not** catch the 429s WasteZero sends for budget caps, the loop breaker or a pause. Those are protections you asked for.
 
+## Anthropic SDK (Claude)
+
+```python
+import os
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="https://wastezero.tech",            # the SDK adds /v1/messages
+    api_key=os.environ["WASTEZERO_API_KEY"],       # your WasteZero key (sent as x-api-key)
+    default_headers={"X-Upstream-Authorization": os.environ["ANTHROPIC_API_KEY"],
+                     "X-WasteZero-Tag": "support-bot"},
+)
+msg = client.messages.create(model="claude-sonnet-4-5", max_tokens=500,
+                             system="...your long instructions...",
+                             messages=[{"role": "user", "content": "Hi"}])
+```
+Allow `prompt_cache` in your settings and WasteZero will mark repeated long prompts for Anthropic's prompt cache. Answers carry `X-WasteZero-Prompt-Cache: added` when it did.
+
+## Gemini, Kimi, DeepSeek, OpenRouter (OpenAI SDK)
+
+Use the OpenAI client from the Python example, pointed at WasteZero, and put your key **for that provider** in `X-Upstream-Authorization`. WasteZero picks the provider from the model name:
+
+| Model name | Goes to |
+|---|---|
+| `gpt-…`, `o3…`, `o4…` | OpenAI |
+| `claude-…` | Anthropic (its OpenAI-compatible endpoint; use the Anthropic SDK for prompt caching) |
+| `gemini-…` | Google Gemini |
+| `kimi-…`, `moonshot-…` | Moonshot (Kimi) |
+| `deepseek-…` | DeepSeek |
+| `org/model` (e.g. `meta-llama/llama-3.3-70b`) | OpenRouter |
+
+To choose a provider yourself, send `X-WasteZero-Provider: gemini` (or `openai`, `anthropic`, `moonshot`, `deepseek`, `openrouter`).
+
 ## Headers
 
 | Header | What it does |
 |---|---|
 | `Authorization: Bearer wz_…` | Your WasteZero key |
-| `X-Upstream-Authorization: Bearer sk-…` | Your provider key. Used for the request and never stored. |
+| `X-Upstream-Authorization: Bearer sk-…` | Your key for the provider being called. Used for the request and never stored. |
+| `X-WasteZero-Provider: gemini` | Optional. Chooses the provider instead of the model name deciding. |
 | `X-WasteZero-Tag: support-bot` | The feature name. Gives you spend, budgets and answer reuse per feature. |
 | `X-WasteZero-User: <your user id>` | Optional. Enables per-end-user budgets. Stored only as a one-way hash. If omitted, the `user` field in the request is used. |
 

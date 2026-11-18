@@ -43,6 +43,7 @@ Set at least these:
 ```
 WASTEZERO_ADMIN_KEY=<run: openssl rand -hex 32>
 OPENAI_API_KEY=<WasteZero's own OpenAI key>
+ANTHROPIC_API_KEY=<optional: WasteZero's own Anthropic key, for quality tests on Claude traffic>
 PUBLIC_BASE_URL=https://wastezero.tech
 TRUST_PROXY=true
 ```

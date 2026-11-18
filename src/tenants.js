@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { JsonDoc } from "./store.js";
 import { sha256 } from "./util.js";
 
-export const OPTIMIZATIONS = ["cache", "route"];
+export const OPTIMIZATIONS = ["cache", "route", "prompt_cache"];
 
 /**
  * What a customer has agreed WasteZero may do on its own. Everything is off by
