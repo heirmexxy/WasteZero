@@ -286,3 +286,25 @@ test("the dashboard and console scripts are valid JavaScript", async () => {
   }
   await s.close();
 });
+
+test("admin signs in by emailed link to the founder email; other emails get the same answer and no email", async () => {
+  const s = await setup({ FOUNDER_EMAIL: "Boss@WasteZero.test" });
+  assert.match((await raw(s, "GET", "/console")).text, /Email me a sign-in link/);
+  const a = await raw(s, "POST", "/console/signin/email", { form: { email: "boss@wastezero.test" } });
+  const b = await raw(s, "POST", "/console/signin/email", { form: { email: "ops@acme.test" } });
+  assert.match(a.text, /If that is the admin email/);
+  assert.match(b.text, /If that is the admin email/);
+  const mails = (await s.ctx.outbox.all()).filter((m) => m.kind === "admin-signin");
+  assert.equal(mails.length, 1);
+  const link = mails[0].text.match(/(http:\/\/wz\.test\/console\/signin\/verify\?token=\S+)/)[1].replace("http://wz.test", "");
+  const first = await raw(s, "GET", link);
+  assert.equal(first.status, 303);
+  assert.match(cookieOf(first), /^wz_a=/);
+  assert.match((await raw(s, "GET", "/console", { cookie: cookieOf(first) })).text, /<script>/);
+  assert.equal((await raw(s, "GET", link)).status, 400);
+  // a customer sign-in link can't be used as an admin link
+  await raw(s, "POST", "/signin", { form: { email: "ops@acme.test" } });
+  const cl = (await s.ctx.outbox.all()).find((m) => m.kind === "signin").text.match(/token=(\S+)/)[1];
+  assert.equal((await raw(s, "GET", "/console/signin/verify?token=" + cl)).status, 400);
+  await s.close();
+});

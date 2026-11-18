@@ -87,7 +87,7 @@ ${message ? `<p class="ok">${escapeHtml(message)}</p>` : ""}${error ? `<p class=
 </div>`);
 }
 
-export const ACCOUNT_PATHS = new Set(["/signin", "/signin/key", "/signin/verify", "/signout", "/console/signin", "/console/signout"]);
+export const ACCOUNT_PATHS = new Set(["/signin", "/signin/key", "/signin/verify", "/signout", "/console/signin", "/console/signin/email", "/console/signin/verify", "/console/signout"]);
 
 export async function handleAccounts(ctx, req, res, url) {
   const { config } = ctx;
@@ -139,12 +139,38 @@ export async function handleAccounts(ctx, req, res, url) {
     return res.end();
   }
 
+  if (p === "/console/signin/email" && m === "POST") {
+    const adminEmail = config.agents?.adminEmail;
+    if (tooMany(`alink:${ip}`, 5)) return sendHtml(res, 429, adminSigninPage("Too many attempts. Try again in 15 minutes.", adminEmail));
+    count(`alink:${ip}`);
+    const form = await readForm(req);
+    const email = String(form.email || "").trim().toLowerCase();
+    if (adminEmail && email === adminEmail && config.adminKey) {
+      const nonce = randomBytes(9).toString("base64url");
+      const token = signToken(config, { k: "al", f: adminFingerprint(config), n: nonce }, 15 * 60);
+      const link = `${config.publicBaseUrl}/console/signin/verify?token=${encodeURIComponent(token)}`;
+      await ctx.mailer.send({ kind: "admin-signin", to: email, subject: "WasteZero admin sign-in link",
+        text: `Sign in to the WasteZero admin console: ${link}\n\nThe link works once, for 15 minutes. If you didn't ask for it, someone tried to sign in as admin. Ignore this email.`,
+        html: `<p><a href="${escapeHtml(link)}">Sign in to the WasteZero admin console</a></p><p style="color:#666">The link works once, for 15 minutes. If you didn't ask for it, ignore this email.</p>` });
+    }
+    return sendHtml(res, 200, adminSigninPage("", adminEmail, "If that is the admin email, a sign-in link is on its way. Check your inbox (and spam)."));
+  }
+  if (p === "/console/signin/verify" && m === "GET") {
+    const payload = verifyToken(config, url.searchParams.get("token"));
+    const now = Date.now();
+    for (const [n, exp] of usedLinks) if (exp < now) usedLinks.delete(n);
+    if (payload?.k !== "al" || payload.f !== adminFingerprint(config) || usedLinks.has(payload.n))
+      return sendHtml(res, 400, adminSigninPage("That link has expired or was already used. Ask for a new one.", config.agents?.adminEmail));
+    usedLinks.set(payload.n, payload.exp * 1000);
+    res.writeHead(303, { location: "/console", "set-cookie": startAdminSession(ctx) });
+    return res.end();
+  }
   if (p === "/console/signin" && m === "POST") {
-    if (tooMany(`admin:${ip}`, 5)) return sendHtml(res, 429, adminSigninPage("Too many attempts. Try again in 15 minutes."));
+    if (tooMany(`admin:${ip}`, 5)) return sendHtml(res, 429, adminSigninPage("Too many attempts. Try again in 15 minutes.", config.agents?.adminEmail));
     const form = await readForm(req);
     const { timingSafeEqual } = await import("node:crypto");
     const a = Buffer.from(String(form.adminKey || "")), b = Buffer.from(config.adminKey || "");
-    if (!config.adminKey || a.length !== b.length || !timingSafeEqual(a, b)) { count(`admin:${ip}`); return sendHtml(res, 401, adminSigninPage("That admin key is not right.")); }
+    if (!config.adminKey || a.length !== b.length || !timingSafeEqual(a, b)) { count(`admin:${ip}`); return sendHtml(res, 401, adminSigninPage("That admin key is not right.", config.agents?.adminEmail)); }
     res.writeHead(303, { location: "/console", "set-cookie": startAdminSession(ctx) });
     return res.end();
   }
@@ -155,12 +181,17 @@ export async function handleAccounts(ctx, req, res, url) {
   return null;
 }
 
-export function adminSigninPage(error = "") {
-  return layout("Admin · WasteZero", `
-<div style="max-width:440px"><h1>Admin console</h1>
-${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
-<form method="post" action="/console/signin">
+export function adminSigninPage(error = "", adminEmail = "", message = "") {
+  const keyForm = `<form method="post" action="/console/signin">
 <label for="k">Admin key</label><input id="k" name="adminKey" type="password" required autocomplete="off">
 <p class="tiny muted">On the server: <code>cat /root/wastezero-admin-key.txt</code></p>
-<button class="btn" type="submit">Sign in</button></form></div>`);
+<button class="btn${adminEmail ? " alt" : ""}" type="submit">Sign in</button></form>`;
+  return layout("Admin · WasteZero", `
+<div style="max-width:440px"><h1>Admin console</h1>
+${message ? `<p class="ok">${escapeHtml(message)}</p>` : ""}${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
+${adminEmail ? `<form method="post" action="/console/signin/email">
+<label for="e">Admin email</label><input id="e" name="email" type="email" required autocomplete="email">
+<button class="btn" type="submit" style="margin-top:14px">Email me a sign-in link</button></form>
+<details style="margin-top:28px"><summary class="small muted">Use the admin key instead</summary>${keyForm}</details>` : keyForm}
+</div>`);
 }

@@ -44,7 +44,7 @@ export async function adminOverview(ctx) {
 
 export function handleConsole(ctx, req, res, url) {
   if (url.pathname !== "/console" && url.pathname !== "/console/") return null;
-  if (!isAdminSession(ctx, req)) return sendHtml(res, 200, adminSigninPage());
+  if (!isAdminSession(ctx, req)) return sendHtml(res, 200, adminSigninPage("", ctx.config.agents?.adminEmail));
   return sendHtml(res, 200, layout("Admin · WasteZero", `
 <div class="row" style="justify-content:space-between;margin:6px 0 0"><h1 style="margin:10px 0 0;font-size:28px">Admin console</h1><span id="op"></span></div>
 <div class="tabs" id="tabs"><button data-t="overview" class="on">Overview</button><button data-t="team">Team &amp; brief <span id="wait"></span></button><button data-t="customers">Customers</button><button data-t="approvals">Approvals</button>

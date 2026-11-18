@@ -108,6 +108,7 @@ export function loadConfig(env = process.env) {
     model: env.AGENT_MODEL || config.judgeModel,
     dailyBudgetUsd: number(env, "AGENT_DAILY_BUDGET_USD", 5, { min: 0, max: 10000, integer: false }),
     founderEmail: env.FOUNDER_EMAIL || "",
+    adminEmail: (env.ADMIN_EMAIL || env.FOUNDER_EMAIL || "").trim().toLowerCase(),
     briefHourUtc: number(env, "BRIEF_HOUR_UTC", 6, { min: 0, max: 23 }),
     inboxSecret: env.INBOX_SECRET || "",
     inboxAutoReply: bool("INBOX_AUTO_REPLY", false),
