@@ -49,7 +49,7 @@ export function handleConsole(ctx, req, res, url) {
   return sendHtml(res, 200, layout("Admin · WasteZero", `
 <div class="row" style="justify-content:space-between;margin:6px 0 0"><h1 style="margin:10px 0 0;font-size:28px">Admin console</h1><span id="op"></span></div>
 <div class="tabs" id="tabs"><button data-t="overview" class="on">Overview</button><button data-t="team">Team &amp; brief <span id="wait"></span></button><button data-t="customers">Customers</button><button data-t="approvals">Approvals</button>
-<button data-t="invoices">Invoices</button><button data-t="prospects">Prospects</button><button data-t="activity">Activity</button></div>
+<button data-t="invoices">Invoices</button><button data-t="prospects">Prospects</button><button data-t="activity">Activity</button><button data-t="settings">Settings</button></div>
 <div id="view"><p class="muted">Loading…</p></div>`, { nav: `<a href="/">Site</a><a href="/console/signout">Sign out</a>`, script: SCRIPT }));
 }
 
@@ -122,6 +122,21 @@ R.prospects=async()=>{const {prospects,lastDiscovery}=await api("/prospects");co
  $("#imp").onsubmit=(ev)=>{ev.preventDefault();act(()=>api("/prospects",{method:"POST",body:JSON.stringify({domains:ev.target.d.value.split(",").map(x=>x.trim()).filter(Boolean)})}),()=>tab("prospects"))};
  view.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>act(()=>api("/prospects/"+b.dataset.p+"/"+b.dataset.a,{method:"POST"}),()=>tab("prospects")));
  view.querySelectorAll("[data-v]").forEach(b=>b.onclick=async()=>{const r=await api("/prospects/"+b.dataset.v);const box=$("#draftbox");box.style.display="block";box.textContent=r.draft?("To: "+r.prospect.contactEmail+"\\nSubject: "+r.draft.subject+"\\n\\n"+r.draft.text):"No draft.";box.scrollIntoView({behavior:"smooth"})});};
+R.settings=async()=>{const r=await api("/settings");const t=r.teamsSeat;
+ const money=(n)=>"$"+Number(n).toFixed(Number(n)%1?2:0);
+ view.innerHTML='<div class="card" style="max-width:640px"><h3>WasteZero for Teams: seat price</h3>'+
+ '<p style="font-size:28px;margin:6px 0"><strong>'+money(t.currentUsd)+'</strong> <span class="muted" style="font-size:15px">per active employee per month ('+esc(t.currentMonth)+')</span></p>'+
+ (t.upcoming?'<p><span class="tag warn">Scheduled</span> '+money(t.upcoming.usd)+' from '+esc(t.upcoming.effectiveFrom)+'</p>':'')+
+ '<p class="small muted">Charged only for employees who used AI through WasteZero that month, on top of the '+r.reference.revenueSharePct+'% savings share. Shown on the Teams and Pricing pages. '+r.teamsCustomers+' compan'+(r.teamsCustomers===1?'y uses':'ies use')+' Teams.</p>'+
+ '<form id="sp"><label for="np">New price (USD per active employee per month)</label><input id="np" name="usd" type="number" min="0" max="1000" step="0.5" value="'+t.currentUsd+'" style="max-width:160px">'+
+ '<label for="wh">Takes effect</label><select id="wh" name="when"><option value="next_month">From next month (gives notice)</option><option value="now">This month (includes this month’s invoices)</option></select>'+
+ '<label class="row" style="gap:6px"><input type="checkbox" name="notify" checked> Email companies that use Teams about the change</label>'+
+ '<button class="btn" type="submit" style="margin-top:10px">Save price</button></form></div>'+
+ '<h3>Price history</h3>'+table(t.history,[["Set",h=>when(h.setAt)],["Price",h=>money(h.usd)],["Was",h=>money(h.from)],["From month",h=>esc(h.effectiveFrom)]])+
+ '<p class="small muted">Starting price without a change: '+money(t.defaultUsd)+'. Usage on WasteZero keys: '+(r.reference.billUsage?'billed at cost +'+r.reference.usageMarkupPct+'%':'not billed')+'.</p>';
+ $("#sp").onsubmit=(ev)=>{ev.preventDefault();const f=ev.target;const v=Number(f.usd.value);
+  if(!confirm("Set the Teams price to "+money(v)+" per active employee per month, "+(f.when.value==="now"?"starting this month":"from next month")+"?"))return;
+  act(async()=>{const x=await api("/settings",{method:"PATCH",body:JSON.stringify({teamsSeatUsd:v,when:f.when.value,notifyCustomers:f.notify.checked})});if(x.notified)alert("Saved. "+x.notified+" compan"+(x.notified===1?"y":"ies")+" emailed.")},()=>tab("settings"));};};
 R.activity=async()=>{const {audit}=await api("/audit?limit=200");
  view.innerHTML=table(audit,[["When",a=>when(a.timestamp)],["Who",a=>esc(a.actor||"")],["",a=>a.level==="escalation"?'<span class="tag warn">needs you</span>':''],["What",a=>esc(a.message||a.action)]]);};
 tab((location.hash||"#overview").slice(1));`;

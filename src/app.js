@@ -21,6 +21,7 @@ import { Prospects, runProspecting, importDomains, draftEmail } from "./prospect
 import { handlePublic, PUBLIC_PATHS } from "./public.js";
 import { SpendMeter, LoopDetector, checkRequest, meterAndCheck } from "./guard.js";
 import { teamsGate, storedProviderKeys } from "./teams.js";
+import { Settings, billingFor } from "./settings.js";
 import { TEAMS_PATHS, handleTeamsPages } from "./teams-http.js";
 import { ACCOUNT_PATHS, handleAccounts, isAdminSession, fromDashboard } from "./accounts.js";
 import { handleApp } from "./dashboard.js";
@@ -36,7 +37,7 @@ import { fileURLToPath } from "node:url";
 
 const BRAND_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "brand");
 const BRAND_TYPES = { ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
-import { CUSTOMER_EDITABLE } from "./tenants.js";
+import { CUSTOMER_EDITABLE, DEFAULT_POLICY } from "./tenants.js";
 import { wasteReport } from "./waste.js";
 import { handleSite, SITE_PATHS } from "./site.js";
 import { sha256 } from "./util.js";
@@ -123,10 +124,12 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
     prefixes: new PrefixTracker(),
     health: new ProviderHealth()
   };
+  ctx.settings = new Settings(file("settings.json"), config);
   await ctx.tenants.init();
   await ctx.rules.init();
   await ctx.prospects.init();
   await ctx.company.init();
+  await ctx.settings.init();
   // WasteZero's own account: its agents and grader call AI through WasteZero itself.
   const perAgent = Object.fromEntries(["agent-chief_of_staff", "agent-inbox", "agent-prospector", "agent-onboarding"].map((t) => [t, Math.max(0.5, config.agents.dailyBudgetUsd / 4)]));
   ctx.internalKey = (await ctx.tenants.ensureInternal({ dailyBudgetUsd: config.agents.dailyBudgetUsd, perAgentDailyUsd: perAgent })).apiKey;
@@ -855,6 +858,27 @@ async function handleAdmin(ctx, req, res, url) {
 
   let match;
   if (m === "GET" && p === "/admin/overview") return send(res, 200, await adminOverview(ctx));
+  if (m === "GET" && p === "/admin/settings") {
+    return send(res, 200, { ...ctx.settings.view(), reference: { revenueSharePct: DEFAULT_POLICY.revenueSharePct, billUsage: ctx.config.billing.billUsage, usageMarkupPct: ctx.config.billing.usageMarkupPct },
+      teamsCustomers: ctx.tenants.listCustomers().filter((t) => t.org?.enabled).length });
+  }
+  if (m === "PATCH" && p === "/admin/settings") {
+    const b = await body();
+    if (!("teamsSeatUsd" in b)) throw httpError(400, "Nothing to change: send teamsSeatUsd");
+    let entry;
+    try { entry = await ctx.settings.setSeatPrice(b.teamsSeatUsd, { when: b.when || "next_month" }); } catch (e) { throw httpError(400, e.message); }
+    await note(ctx, { actor: "admin", action: "teams_seat_price", message: `Teams seat price set to $${entry.usd} per active employee/month from ${entry.effectiveFrom} (was $${entry.from})` });
+    // Tell companies using Teams before a change reaches their invoice (only when asked).
+    let notified = 0;
+    if (b.notifyCustomers && entry.usd !== entry.from) {
+      for (const t of ctx.tenants.listCustomers().filter((x) => x.org?.enabled && x.billing?.email)) {
+        await ctx.mailer.send({ kind: "price-change", to: t.billing.email, subject: `WasteZero for Teams: price change from ${entry.effectiveFrom}`,
+          text: `From ${entry.effectiveFrom}, WasteZero for Teams costs $${entry.usd} per employee per month (was $${entry.from}). You're only charged for employees who used AI through WasteZero that month, and your savings share is unchanged.\n\nQuestions? Just reply to this email.` });
+        notified++;
+      }
+    }
+    return send(res, 200, { ...ctx.settings.view(), notified });
+  }
   if (m === "GET" && p === "/admin/team") return send(res, 200, await teamStatus(ctx));
   if (m === "POST" && p === "/admin/agents/run") {
     const b = await body();
@@ -976,7 +1000,7 @@ async function handleAdmin(ctx, req, res, url) {
       if (!isPeriod(period)) throw httpError(400, "period must be YYYY-MM");
       const tenant = tenantOr404(tenantId);
       const issued = latestInvoices(await ctx.invoices.all()).find((i) => i.tenantId === tenantId && i.period === period);
-      const invoice = issued || { id: "preview", ...computeInvoice({ events: await ctx.events.all(), tenant, period, usage: ctx.config.billing }), reconciliation: null, status: "preview" };
+      const invoice = issued || { id: "preview", ...computeInvoice({ events: await ctx.events.all(), tenant, period, usage: billingFor(ctx, period) }), reconciliation: null, status: "preview" };
       return q("format") === "html" ? sendHtml(res, renderInvoiceHtml(invoice, { payUrl: tenant.billing?.status === "card_on_file" ? "" : cardSetupUrl(ctx, tenant) })) : send(res, 200, { invoice });
     }
     return send(res, 200, { invoices: latestInvoices(await ctx.invoices.all()).filter((i) => !tenantId || i.tenantId === tenantId) });
@@ -988,7 +1012,7 @@ async function handleAdmin(ctx, req, res, url) {
     if (!Number.isFinite(b.providerBilledUsd) || b.providerBilledUsd < 0) throw httpError(400, "providerBilledUsd must be a non-negative number");
     const current = latestInvoices(await ctx.invoices.all()).find((i) => i.tenantId === tenant.id && i.period === b.period);
     if (current && ["paid", "charging", "pending"].includes(current.status)) throw httpError(409, `Invoice ${current.id} is ${current.status}; it cannot be reissued`);
-    const computed = computeInvoice({ events: await ctx.events.all(), tenant, period: b.period, usage: ctx.config.billing });
+    const computed = computeInvoice({ events: await ctx.events.all(), tenant, period: b.period, usage: billingFor(ctx, b.period) });
     const rec = reconcile({ invoice: computed, providerBilledUsd: b.providerBilledUsd, tolerancePct: ctx.config.reconcileTolerancePct });
     const invoice = issueInvoice(computed, rec);
     await ctx.invoices.add(invoice);

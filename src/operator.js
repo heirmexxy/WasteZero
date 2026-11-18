@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { sweepTeams } from "./teams.js";
+import { billingFor } from "./settings.js";
 import path from "node:path";
 import { analyze } from "./analyzer.js";
 import { computeInvoice, issueInvoice, latestInvoices } from "./billing.js";
@@ -132,7 +133,7 @@ export async function runOperator(ctx, { now = new Date() } = {}) {
     // 4. Draft last month's invoice once (never for WasteZero's own account).
     const period = previousPeriod(now);
     if (!tenant.internal && !invoices.some((i) => i.tenantId === tenant.id && i.period === period)) {
-      const computed = computeInvoice({ events, tenant, period, usage: ctx.config.billing });
+      const computed = computeInvoice({ events, tenant, period, usage: billingFor(ctx, period) });
       if (computed.calls > 0) {
         const invoice = issueInvoice(computed);
         await ctx.invoices.add(invoice);

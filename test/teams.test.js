@@ -250,3 +250,38 @@ test("the Teams page is public and linked from the menu, homepage and pricing; t
   assert.equal(computeInvoice({ events: [ev("p1")], tenant, period: "2026-11", usage: {} }).seatsUsd, 0, "free unless a price is set");
   await s.close();
 });
+
+test("admin sets the Teams seat price: $5 by default, changes announced for next month, invoices use their own month's price", async () => {
+  const s = await startApp({ OPENAI_BASE_URL: provider.url, PUBLIC_BASE_URL: "http://wz.test" });
+  const { billingFor } = await import("../src/settings.js");
+  const r0 = await s.admin("GET", "/admin/settings");
+  assert.equal(r0.json.teamsSeat.currentUsd, 5);
+  assert.match(await (await fetch(s.base + "/teams")).text(), /\$5 per employee per month/);
+  // a Teams customer to notify
+  const { json } = await s.admin("POST", "/admin/tenants", { name: "Acme", email: "owner@acme.test" });
+  s.ctx.tenants.get(json.tenant.id).org = { ...defaultOrg(), enabled: true };
+  const now = new Date();
+  const thisMonth = now.toISOString().slice(0, 7);
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 7);
+  const r1 = await s.admin("PATCH", "/admin/settings", { teamsSeatUsd: 7, when: "next_month", notifyCustomers: true });
+  assert.equal(r1.status, 200, r1.text);
+  assert.equal(r1.json.notified, 1);
+  assert.equal(r1.json.teamsSeat.currentUsd, 5, "this month unchanged");
+  assert.deepEqual(r1.json.teamsSeat.upcoming, { usd: 7, effectiveFrom: next });
+  assert.equal(billingFor(s.ctx, thisMonth).teamsSeatUsd, 5);
+  assert.equal(billingFor(s.ctx, next).teamsSeatUsd, 7);
+  assert.match(await (await fetch(s.base + "/teams")).text(), new RegExp(`From ${next}: \\$7 per employee`));
+  assert.ok((await s.ctx.outbox.all()).some((m) => m.kind === "price-change" && m.to === "owner@acme.test" && /\$7/.test(m.text)));
+  // immediate change
+  const r2 = await s.admin("PATCH", "/admin/settings", { teamsSeatUsd: 4.5, when: "now" });
+  assert.equal(r2.json.teamsSeat.currentUsd, 4.5);
+  assert.equal(r2.json.notified, 0, "no emails unless asked");
+  // validation and auth
+  assert.equal((await s.admin("PATCH", "/admin/settings", { teamsSeatUsd: -1 })).status, 400);
+  assert.equal((await s.call("PATCH", "/admin/settings", { body: { teamsSeatUsd: 1 } })).status, 401);
+  // survives a restart
+  await s.close();
+  const s2 = await startApp({ OPENAI_BASE_URL: provider.url, DATA_DIR: s.dataDir });
+  assert.equal((await s2.admin("GET", "/admin/settings")).json.teamsSeat.currentUsd, 4.5);
+  await s2.close();
+});

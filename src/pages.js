@@ -8,9 +8,14 @@ export const PAGE_PATHS = new Set(["/pricing", "/docs", "/privacy", "/terms", "/
 const who = (config) => escapeHtml(config.operatorName || "WasteZero");
 const contact = (config) => escapeHtml(config.contactEmail || config.email?.replyTo || config.email?.from || "");
 
-const seatLine = (config) => (config.billing?.teamsSeatUsd > 0
-  ? `$${config.billing.teamsSeatUsd} per employee per month, only for employees who used AI that month, plus your usual share of verified savings.`
-  : "Included at no extra cost during early access. You pay only the usual share of the savings we verify.");
+const dollars = (n) => `$${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}`;
+const seatLine = (config) => {
+  const now = config.billing?.teamsSeatUsd, next = config.billing?.teamsSeatUpcoming;
+  const base = now > 0
+    ? `${dollars(now)} per employee per month, only for employees who used AI that month, plus your usual share of verified savings.`
+    : "Included at no extra cost. You pay only the usual share of the savings we verify.";
+  return base + (next ? ` From ${next.effectiveFrom}: ${dollars(next.usd)} per employee per month.` : "");
+};
 
 function teams(config) {
   return layout("WasteZero for Teams · AI budgets for every employee", `

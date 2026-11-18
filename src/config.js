@@ -97,8 +97,8 @@ export function loadConfig(env = process.env) {
     // When customer traffic runs on WasteZero's own provider keys, bill that usage on the invoice.
     billUsage: bool("BILL_USAGE", true),
     usageMarkupPct: number(env, "USAGE_MARKUP_PCT", 0, { min: 0, max: 100, integer: false }),
-    // WasteZero for Teams: a fee per employee who used AI through WasteZero that month. 0 = free.
-    teamsSeatUsd: number(env, "TEAMS_SEAT_PRICE_USD", 0, { min: 0, max: 1000, integer: false })
+    // WasteZero for Teams: starting fee per employee who used AI that month. Change it in the admin console (Settings).
+    teamsSeatUsd: number(env, "TEAMS_SEAT_PRICE_USD", 5, { min: 0, max: 1000, integer: false })
   };
   if (!["none", "stripe", "paystack"].includes(config.billing.provider)) throw new Error("PAYMENT_PROVIDER must be none, stripe or paystack");
   if (config.billing.provider === "stripe" && !config.billing.stripeSecretKey) throw new Error("STRIPE_SECRET_KEY is required when PAYMENT_PROVIDER=stripe");
