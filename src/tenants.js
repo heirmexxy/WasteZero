@@ -96,9 +96,10 @@ export function normalizePolicy(input = {}, base = DEFAULT_POLICY) {
   return policy;
 }
 
-const publicView = ({ keyHash, keys = [], billing = {}, ...rest }) => {
+const publicView = ({ keyHash, keys = [], billing = {}, org, ...rest }) => {
   const { authorizationCode, paymentMethodId, ...safeBilling } = billing;
-  return { ...rest, keys: keys.map(({ hash, ...k }) => k), billing: { ...safeBilling, hasCard: Boolean(authorizationCode || paymentMethodId) } };
+  return { ...rest, keys: keys.map(({ hash, ...k }) => k), billing: { ...safeBilling, hasCard: Boolean(authorizationCode || paymentMethodId) },
+    ...(org ? { org: { enabled: !!org.enabled, people: (org.people || []).filter((p) => p.active !== false).length, providerKeys: Object.keys(org.providerKeys || {}) } } : {}) };
 };
 
 export class Tenants {
@@ -132,15 +133,38 @@ export class Tenants {
   }
 
   // Keys are stored only as SHA-256 hashes; comparing hashes reveals nothing useful about the key.
-  findByKey(key) {
+  findByKey(key) { return this.lookup(key)?.tenant || null; }
+  /** The customer and the key record (which may belong to one employee, for WasteZero for Teams). */
+  lookup(key) {
     if (!key) return null;
     const hash = sha256(key);
     for (const t of this.doc.data.tenants) {
       if (!t.active) continue;
       const k = t.keys?.find((x) => x.hash === hash && !x.revokedAt);
-      if (k) { k.lastUsedAt = new Date().toISOString(); return t; }   // saved with the next write
+      if (k) { k.lastUsedAt = new Date().toISOString(); return { tenant: t, key: k }; }   // saved with the next write
     }
     return null;
+  }
+  /** An employee's own key: replaces any earlier key of theirs. Returns the key once. */
+  async personKey(tenantId, personRecord) {
+    const tenant = this.get(tenantId);
+    if (!tenant) throw new Error("Unknown customer");
+    const now = new Date().toISOString();
+    for (const k of tenant.keys || []) if (k.personId === personRecord.id && !k.revokedAt) k.revokedAt = now;
+    const apiKey = newKey();
+    const key = { id: keyId(), label: `Person: ${personRecord.email}`, hint: keyHint(apiKey), hash: sha256(apiKey), createdAt: now, personId: personRecord.id };
+    tenant.keys = [...(tenant.keys || []).filter((k) => !k.revokedAt || Date.parse(k.revokedAt) > Date.now() - 7 * 86400_000), key];
+    personRecord.keyId = key.id;
+    await this.doc.save();
+    return { apiKey, key };
+  }
+  async revokePersonKeys(tenantId, personId) {
+    const tenant = this.get(tenantId);
+    const now = new Date().toISOString();
+    let n = 0;
+    for (const k of tenant?.keys || []) if (k.personId === personId && !k.revokedAt) { k.revokedAt = now; n++; }
+    if (n) await this.doc.save();
+    return n;
   }
   get(id) { return this.doc.data.tenants.find((t) => t.id === id) || null; }
   list() { return this.doc.data.tenants.filter((t) => t.active); }
@@ -248,7 +272,7 @@ export class Tenants {
   async createKey(id, label = "New key") {
     const tenant = this.get(id);
     if (!tenant) return null;
-    if ((tenant.keys || []).filter((k) => !k.revokedAt).length >= 20) throw new Error("At most 20 active keys");
+    if ((tenant.keys || []).filter((k) => !k.revokedAt && !k.personId).length >= 20) throw new Error("At most 20 active keys");
     const apiKey = newKey();
     const key = { id: keyId(), label: String(label || "New key").trim().slice(0, 60) || "New key", hint: keyHint(apiKey), hash: sha256(apiKey), createdAt: new Date().toISOString() };
     tenant.keys = [...(tenant.keys || []), key];
@@ -261,7 +285,7 @@ export class Tenants {
     const tenant = this.get(id);
     const key = tenant?.keys?.find((k) => k.id === keyIdToRevoke && !k.revokedAt);
     if (!key) return { error: "Key not found" };
-    if (tenant.keys.filter((k) => !k.revokedAt).length <= 1) return { error: "This is your only active key. Create another one first." };
+    if (!key.personId && tenant.keys.filter((k) => !k.revokedAt && !k.personId).length <= 1) return { error: "This is your only active key. Create another one first." };
     key.revokedAt = new Date().toISOString();
     await this.doc.save();
     return { ok: true };

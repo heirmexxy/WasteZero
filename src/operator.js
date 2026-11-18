@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { sweepTeams } from "./teams.js";
 import path from "node:path";
 import { analyze } from "./analyzer.js";
 import { computeInvoice, issueInvoice, latestInvoices } from "./billing.js";
@@ -144,6 +145,9 @@ export async function runOperator(ctx, { now = new Date() } = {}) {
 
   // 5. Send and collect invoices.
   await collect(ctx, report, { now });
+
+  // 5b. WasteZero for Teams: end extra budgets that have expired, and ask for a review.
+  try { const n = await sweepTeams(ctx, now); if (n) report.teams = { expired: n }; } catch (error) { ctx.log.error("teams sweep failed:", error.message); }
 
   // 6. The rest of the team: Chief of Staff, Prospector, Onboarding, Reliability.
   const before = report.escalations.length;

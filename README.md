@@ -8,6 +8,25 @@ find customers → sign up (observe-only) → measure spend → find waste → t
       → go live if quality holds → watch quality, roll back if it slips → invoice % of savings → charge card
 ```
 
+## WasteZero for Teams: AI budgets for every employee
+
+Built for the policies Salesforce, Coinbase and JPMorgan now use, so other companies get them on day one.
+
+- **Budgets by role.** For example $1,000 a month for technical staff, $500 for delivery and $100 for non-technical staff. One person can have their own override.
+- **Team pools.** One person's spike is covered by teammates who are under budget. When the pool runs out, requests move to a cheaper model by default so work doesn't stop, or they stop, as the company chooses.
+- **Each employee gets their own WasteZero key** for Claude Code (`ANTHROPIC_BASE_URL`), Cursor and scripts. Alternatively, a shared key with `X-WasteZero-User: <email>` works.
+- **Company provider keys** are stored encrypted, so employees need only their WasteZero key.
+- **Alerts** at 80% and 100% go to the person and their manager, by email and Slack.
+- **More budget, approved up the chain.** Employees ask on `/me`:
+  - up to +20% for this month: their second-line manager approves;
+  - up to 3x for 90 days: their third-line manager approves, with an ROI note;
+  - above 3x for 30 days: an executive and finance both approve.
+
+  Approvers decide from a link in their email. Extra budget expires and comes back up for review.
+- **Privacy mode** for works-council countries: managers see team totals only.
+- **Setup:** import staff by CSV (`email,name,role,team,manager_email,monthly_usd`), then manage everything in the dashboard's **Team budgets** tab.
+- A request moved to a cheaper model because of a budget is never counted as savings, so it's never billed.
+
 ## New in 0.7.0: a company that runs itself, with a human on the money
 
 **Customers and the founder now have real dashboards.**

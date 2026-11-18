@@ -20,6 +20,8 @@ import { collect, cardSetupUrl } from "./collections.js";
 import { Prospects, runProspecting, importDomains, draftEmail } from "./prospecting.js";
 import { handlePublic, PUBLIC_PATHS } from "./public.js";
 import { SpendMeter, LoopDetector, checkRequest, meterAndCheck } from "./guard.js";
+import { teamsGate, storedProviderKeys } from "./teams.js";
+import { TEAMS_PATHS, handleTeamsPages } from "./teams-http.js";
 import { ACCOUNT_PATHS, handleAccounts, isAdminSession, fromDashboard } from "./accounts.js";
 import { handleApp } from "./dashboard.js";
 import { handleConsole, adminOverview } from "./console.js";
@@ -195,6 +197,10 @@ async function handle(ctx, req, res) {
     const handled = await handleContact(ctx, req, res, url);
     if (handled !== null || res.headersSent) return;
   }
+  if (TEAMS_PATHS.has(p)) {
+    const handled = await handleTeamsPages(ctx, req, res, url);
+    if (handled !== null || res.headersSent) return;
+  }
   if (ACCOUNT_PATHS.has(p)) {
     const handled = await handleAccounts(ctx, req, res, url);
     if (handled !== null || res.headersSent) return;
@@ -221,7 +227,11 @@ async function handle(ctx, req, res) {
     return handleAdmin(ctx, req, res, url);
   }
 
-  const tenant = ctx.tenants.findByKey(customerApiKey(req));
+  const found = ctx.tenants.lookup(customerApiKey(req));
+  const tenant = found?.tenant || null;
+  if (found?.key?.personId) req.wzPersonId = found.key.personId;
+  // WasteZero for Teams: a company's stored provider keys, so employees' tools need only their WasteZero key.
+  if (tenant?.org?.providerKeys && Object.keys(tenant.org.providerKeys).length) req.wzStoredKeys = storedProviderKeys(ctx.config, tenant);
   if (!tenant) {
     if (p === "/v1/messages") return send(res, 401, anthropicErrorBody(401, "Missing or unknown WasteZero API key"));
     return oaiError(res, 401, "invalid_api_key", "Missing or unknown WasteZero API key");
@@ -366,6 +376,8 @@ async function handleChat(ctx, req, res, tenant) {
   if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.model !== "string" || !Array.isArray(body.messages)) {
     return oaiError(res, 400, "invalid_request", "Expected a chat-completions JSON body with model and messages");
   }
+  const teamBlock = teamsGate(ctx, tenant, req, body);
+  if (teamBlock) return oaiError(res, teamBlock.status, teamBlock.code, teamBlock.message);
 
   if (config.offers[body.model]) return handleOffer(ctx, req, res, tenant, body, receivedAt);
 
@@ -383,7 +395,7 @@ async function handleChat(ctx, req, res, tenant) {
   const base = {
     timestamp: new Date().toISOString(), tenantId: tenant.id, provider: provider.name, format: "openai", tag, endUser, requestedModel: body.model,
     endUserLabel: tenant.policy.storeEndUserIds && rawUser ? String(rawUser).slice(0, 64) : null, plan: sanitizeTag(req.headers["x-wastezero-plan"]),
-    fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
+    ...(req.wzTeam || {}), fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
     maxTokens: Number(body.max_completion_tokens ?? body.max_tokens) || null
   };
 
@@ -470,7 +482,7 @@ async function handleOffer(ctx, req, res, tenant, body, receivedAt) {
   const base = {
     timestamp: new Date().toISOString(), tenantId: tenant.id, format: "openai", tag, endUser, requestedModel: body.model,
     endUserLabel: tenant.policy.storeEndUserIds && rawUser ? String(rawUser).slice(0, 64) : null, plan: sanitizeTag(req.headers["x-wastezero-plan"]),
-    fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true, maxTokens: Number(body.max_completion_tokens ?? body.max_tokens) || null
+    ...(req.wzTeam || {}), fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true, maxTokens: Number(body.max_completion_tokens ?? body.max_tokens) || null
   };
   const block = checkRequest(ctx, tenant, { tag, endUser, fp });
   if (block) {
@@ -635,6 +647,8 @@ async function handleMessages(ctx, req, res, tenant) {
   if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.model !== "string" || !Array.isArray(body.messages)) {
     return anthropicError(res, 400, "Expected a Messages API JSON body with model and messages");
   }
+  const teamBlock = teamsGate(ctx, tenant, req, body);
+  if (teamBlock) return anthropicError(res, teamBlock.status, teamBlock.message);
 
   const header = req.headers["x-wastezero-provider"];
   let { provider, error: providerError } = resolveProvider(config, { model: body.model, header });
@@ -654,7 +668,7 @@ async function handleMessages(ctx, req, res, tenant) {
   const base = {
     timestamp: new Date().toISOString(), tenantId: tenant.id, provider: provider.name, format: "anthropic", tag, endUser,
     endUserLabel: tenant.policy.storeEndUserIds && rawUser ? String(rawUser).slice(0, 64) : null, plan: sanitizeTag(req.headers["x-wastezero-plan"]),
-    requestedModel: body.model, fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
+    requestedModel: body.model, ...(req.wzTeam || {}), fingerprint: fp, deterministic: isDeterministic(body), stream: body.stream === true,
     maxTokens: Number(body.max_tokens) || null
   };
 

@@ -73,9 +73,10 @@ function signinPage({ message = "", error = "", email = "" } = {}) {
   return layout("Sign in · WasteZero", `
 <div style="max-width:440px">
 <h1>Sign in</h1>
+<p class="muted">For companies with a WasteZero account. We email a one-time link to the address you signed up with.</p>
 ${message ? `<p class="ok">${escapeHtml(message)}</p>` : ""}${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
 <form method="post" action="/signin">
-<label for="email">Billing email</label><input id="email" name="email" type="email" required value="${escapeHtml(email)}" autocomplete="email">
+<label for="email">The email you signed up with</label><input id="email" name="email" type="email" required value="${escapeHtml(email)}" autocomplete="email">
 <button class="btn" type="submit" style="margin-top:14px">Email me a sign-in link</button>
 </form>
 <details style="margin-top:28px"><summary class="small muted">Sign in with an API key instead</summary>
@@ -83,7 +84,8 @@ ${message ? `<p class="ok">${escapeHtml(message)}</p>` : ""}${error ? `<p class=
 <label for="key">WasteZero API key</label><input id="key" name="apiKey" type="password" placeholder="wz_..." autocomplete="off" required>
 <button class="btn alt" type="submit" style="margin-top:14px">Sign in</button>
 </form></details>
-<p class="small muted" style="margin-top:28px">New here? <a href="/signup">Create an account</a> · <a href="/console">Admin</a></p>
+<p style="margin-top:28px">No account yet? <a href="/signup"><strong>Create one</strong></a> (free audit first, pay only from savings).</p>
+<p class="small muted">Employee with an AI budget? <a href="/me/signin">See my budget</a> · WasteZero staff: <a href="/console">Admin console</a></p>
 </div>`);
 }
 
@@ -113,7 +115,7 @@ export async function handleAccounts(ctx, req, res, url) {
         html: `<p><a href="${escapeHtml(link)}">Sign in to WasteZero</a></p><p style="color:#666">The link works once, for 15 minutes. If you didn't ask for it, ignore this email.</p>` });
     }
     // Same answer either way, so the form can't be used to find out who is a customer.
-    return sendHtml(res, 200, signinPage({ message: "If that email has an account, a sign-in link is on its way. Check your inbox (and spam).", email }));
+    return sendHtml(res, 200, signinPage({ message: "If that email has an account, a sign-in link is on its way. Check your inbox (and spam). No email after a few minutes? You may not have an account yet: create one below.", email }));
   }
   if (p === "/signin/verify" && m === "GET") {
     const payload = verifyToken(config, url.searchParams.get("token"));

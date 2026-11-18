@@ -75,7 +75,7 @@ export function resolveProvider(config, { model, header }) {
 
 /** The key to call the provider with: the customer's own (preferred) or WasteZero's. */
 export function providerKey(req, provider) {
-  const own = String(req.headers["x-upstream-authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  const own = String(req.headers["x-upstream-authorization"] || "").replace(/^Bearer\s+/i, "").trim() || req.wzStoredKeys?.[provider.name] || "";
   return { key: own || provider.serverKey, source: own ? "customer" : "wastezero" };
 }
 

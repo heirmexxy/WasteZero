@@ -9,6 +9,7 @@ import { CUSTOMER_EDITABLE, normalizePolicy } from "./tenants.js";
 import { note } from "./operator.js";
 import { signToken } from "./tokens.js";
 import { isPeriod, median } from "./util.js";
+import { handleTeamsApi } from "./teams-http.js";
 
 // Customer dashboard: /app (page) and /app/api/* (JSON, signed-in customer only).
 
@@ -74,6 +75,7 @@ export async function handleApp(ctx, req, res, url) {
   if (m !== "GET" && !fromDashboard(req)) return json(res, 403, { error: "Missing dashboard header" });
   const api = p.slice("/app/api".length);
   const fresh = () => ctx.tenants.get(tenant.id);
+  if (api === "/teams" || api.startsWith("/teams/")) return handleTeamsApi(ctx, req, res, fresh(), api, { json, readJson });
 
   if (m === "GET" && api === "/overview") return json(res, 200, await overview(ctx, tenant));
   if (m === "GET" && api === "/waste") return json(res, 200, wasteReport({ events: await ctx.events.all(), tenant, config: ctx.config, rules: ctx.rules }));
@@ -131,7 +133,7 @@ export async function handleApp(ctx, req, res, url) {
     return json(res, 200, { ok: true });
   }
 
-  if (m === "GET" && api === "/keys") return json(res, 200, { keys: ctx.tenants.publicView(fresh()).keys });
+  if (m === "GET" && api === "/keys") return json(res, 200, { keys: ctx.tenants.publicView(fresh()).keys.filter((k) => !k.personId) });
   if (m === "POST" && api === "/keys") {
     const b = await readJson(req).catch(() => ({}));
     try {
@@ -189,9 +191,9 @@ function appPage(ctx, tenant) {
 <div class="row" style="justify-content:space-between;margin:8px 0 0"><h1 style="margin:10px 0 0;font-size:28px" id="title">${tenant.name.replace(/[<>&"]/g, "")}</h1><span id="pausebox"></span></div>
 <div class="tabs" id="tabs">
 <button data-t="overview" class="on">Overview</button><button data-t="savings">Savings &amp; waste</button><button data-t="approvals">Approvals <span id="pendingCount"></span></button>
-<button data-t="profit">Profit per customer</button><button data-t="settings">Protection &amp; settings</button><button data-t="keys">API keys</button><button data-t="billing">Billing</button><button data-t="setup">Setup</button>
+<button data-t="profit">Profit per customer</button><button data-t="settings">Protection &amp; settings</button><button data-t="teams">Team budgets</button><button data-t="keys">API keys</button><button data-t="billing">Billing</button><button data-t="setup">Setup</button>
 </div>
-<div id="view"><p class="muted">Loading…</p></div>`, { nav: NAV, script: appScript(base) });
+<div id="view"><p class="muted">Loading…</p></div><script src="/app/teams.js"></script>`, { nav: NAV, script: appScript(base) });
 }
 
 function appScript(base) {
@@ -214,6 +216,7 @@ async function pausebox(o){$("#pausebox").innerHTML=o.paused?'<span class="tag b
  if(ps)ps.onclick=async()=>{if(confirm("Pause all AI traffic through WasteZero? Requests will get a 429 until you resume."))await api("/pause",{method:"POST"});tab("overview")};
  $("#pendingCount").innerHTML=o.pendingApprovals?'<span class="tag warn">'+o.pendingApprovals+'</span>':"";}
 const R={};
+R.teams=()=>window.WZTeams({view,api,esc,usd,table,when});
 R.overview=async()=>{const o=await api("/overview");pausebox(o);
  const first=o.firstRequestAt?'<span class="tag">Receiving traffic</span> <span class="small muted">last request '+when(o.lastRequestAt)+'</span>':'<div class="notice"><strong>Waiting for your first request…</strong> Follow the <a href="#setup" onclick="tab(\\'setup\\');return false">setup</a> steps; this updates by itself.</div>';
  const f=o.forecast;const cap=o.budgets.monthlyUsd;

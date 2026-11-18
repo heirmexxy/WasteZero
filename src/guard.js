@@ -20,7 +20,7 @@ export class SpendMeter {
   constructor() { this.t = new Map(); }
   state(tenantId) {
     let s = this.t.get(tenantId);
-    if (!s) { s = { day: "", dayUsd: 0, tags: new Map(), users: new Map(), month: "", monthUsd: 0, hours: new Map() }; this.t.set(tenantId, s); }
+    if (!s) { s = { day: "", dayUsd: 0, tags: new Map(), users: new Map(), month: "", monthUsd: 0, hours: new Map(), people: new Map(), teams: new Map(), peopleUsd: 0, fallbacks: 0 }; this.t.set(tenantId, s); }
     return s;
   }
   add(event) {
@@ -30,8 +30,11 @@ export class SpendMeter {
     const day = dayOf(event.timestamp), month = monthOf(event.timestamp), hour = hourOf(event.timestamp);
     const today = dayOf(new Date().toISOString());
     if (month === monthOf(today)) {
-      if (s.month !== month) { s.month = month; s.monthUsd = 0; }
+      if (s.month !== month) { s.month = month; s.monthUsd = 0; s.people = new Map(); s.teams = new Map(); s.peopleUsd = 0; s.fallbacks = 0; }
       s.monthUsd += usd;
+      if (event.personId) { s.people.set(event.personId, (s.people.get(event.personId) || 0) + usd); s.peopleUsd += usd; }
+      if (event.teamId) s.teams.set(event.teamId, (s.teams.get(event.teamId) || 0) + usd);
+      if (event.budgetFallbackFrom) s.fallbacks++;
     }
     if (day === today) {
       if (s.day !== day) { s.day = day; s.dayUsd = 0; s.tags = new Map(); s.users = new Map(); }
@@ -55,6 +58,17 @@ export class SpendMeter {
       monthUsd: s.month === month ? s.monthUsd : 0,
       tag: (t) => (s.day === today && t ? s.tags.get(t) || 0 : 0),
       user: (u) => (s.day === today && u ? s.users.get(u) || 0 : 0)
+    };
+  }
+  /** This month's spend per employee and per team (WasteZero for Teams). */
+  month(tenantId) {
+    const s = this.state(tenantId);
+    const cur = s.month === monthOf(new Date().toISOString());
+    return {
+      person: (id) => (cur && id ? s.people.get(id) || 0 : 0),
+      team: (id) => (cur && id ? s.teams.get(id) || 0 : 0),
+      allPeople: () => (cur ? s.peopleUsd : 0),
+      fallbacks: () => (cur ? s.fallbacks : 0)
     };
   }
   /** Spend in the current hour, and the median of the active hours among the previous 24. */
