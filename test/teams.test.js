@@ -235,3 +235,18 @@ test("secrets round-trip and the Teams tab script is valid JavaScript", async ()
   assert.doesNotThrow(() => new vm.Script(js));
   await s.close();
 });
+
+test("the Teams page is public and linked from the menu, homepage and pricing; the seat fee bills active employees only", async () => {
+  const s = await startApp({ OPENAI_BASE_URL: provider.url, TEAMS_SEAT_PRICE_USD: "4" });
+  const page = await (await fetch(s.base + "/teams")).text();
+  assert.match(page, /AI budgets for every employee/);
+  assert.match(page, /\$4 per employee per month, only for employees who used AI/);
+  for (const p of ["/", "/pricing"]) assert.match(await (await fetch(s.base + p)).text(), /href="\/teams"/);
+  const { computeInvoice } = await import("../src/billing.js");
+  const tenant = { id: "t1", name: "Acme", policy: { revenueSharePct: 20 } };
+  const ev = (personId) => ({ tenantId: "t1", timestamp: "2026-11-05T00:00:00Z", status: 200, actualCostUsd: 1, personId });
+  const inv = computeInvoice({ events: [ev("p1"), ev("p1"), ev("p2"), ev(null)], tenant, period: "2026-11", usage: { teamsSeatUsd: 4 } });
+  assert.equal(inv.seats, 2); assert.equal(inv.seatsUsd, 8); assert.equal(inv.totalUsd, 8);
+  assert.equal(computeInvoice({ events: [ev("p1")], tenant, period: "2026-11", usage: {} }).seatsUsd, 0, "free unless a price is set");
+  await s.close();
+});

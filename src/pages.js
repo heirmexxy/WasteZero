@@ -3,10 +3,46 @@ import { DEFAULT_POLICY } from "./tenants.js";
 import { escapeHtml } from "./util.js";
 
 // Static public pages: pricing, docs, privacy, terms.
-export const PAGE_PATHS = new Set(["/pricing", "/docs", "/privacy", "/terms"]);
+export const PAGE_PATHS = new Set(["/pricing", "/docs", "/privacy", "/terms", "/teams"]);
 
 const who = (config) => escapeHtml(config.operatorName || "WasteZero");
 const contact = (config) => escapeHtml(config.contactEmail || config.email?.replyTo || config.email?.from || "");
+
+const seatLine = (config) => (config.billing?.teamsSeatUsd > 0
+  ? `$${config.billing.teamsSeatUsd} per employee per month, only for employees who used AI that month, plus your usual share of verified savings.`
+  : "Included at no extra cost during early access. You pay only the usual share of the savings we verify.");
+
+function teams(config) {
+  return layout("WasteZero for Teams · AI budgets for every employee", `
+<span class="tag">WasteZero for Teams</span>
+<h1 style="margin-top:10px">AI budgets for every employee, without slowing anyone down</h1>
+<p class="muted" style="font-size:18px;max-width:680px">Coding agents and AI assistants can cost thousands of dollars a month per person. Salesforce now gives every role a monthly token budget, Coinbase caps weekly AI spend by role and JPMorgan limits Claude Code per engineer. WasteZero gives your company the same controls on day one, and moves routine work to cheaper models automatically so people stay under budget.</p>
+<div class="row" style="margin:18px 0 8px"><a class="btn" href="/signup">Set up Teams</a><a class="btn alt" href="/signin">Already a customer? Sign in</a></div>
+<p class="small muted">Then open <strong>Team budgets</strong> in your dashboard.</p>
+
+<h2>How it works</h2>
+<div class="grid4">
+<div class="card"><span class="tag">1</span><h3>Import your people</h3><p class="muted small">Paste a CSV: email, role, team, manager. Set a monthly budget per role, for example $1,000 technical and $100 non-technical.</p></div>
+<div class="card"><span class="tag">2</span><h3>Everyone gets a key</h3><p class="muted small">Each employee creates their own WasteZero key and points Claude Code, Cursor or their scripts at it. Store your provider key once, encrypted.</p></div>
+<div class="card"><span class="tag">3</span><h3>Spend is tracked live</h3><p class="muted small">By person, team and role. Alerts at 80% and 100% go to the employee and their manager, by email or Slack.</p></div>
+<div class="card"><span class="tag">4</span><h3>No hard stops</h3><p class="muted small">A team's budgets pool together. At the limit, requests move to a cheaper model, or stop until more is approved, as you choose.</p></div>
+</div>
+
+<h2>Built in</h2>
+<div class="grid">
+<div class="card"><h3>Approval chain</h3><p class="small muted">Need more? Up to +20% goes to the person's manager's manager. Up to 3× needs an ROI note and one level higher. Above that, an executive and finance. Approvers decide from a link in their email. Extra budget expires and comes back for review.</p></div>
+<div class="card"><h3>Automatic savings</h3><p class="small muted">Answer reuse, prompt caching and tested cheaper models apply to every request. You don't have to ask people to "match the model to the task".</p></div>
+<div class="card"><h3>Privacy mode</h3><p class="small muted">For works-council countries: managers see team totals only, never one person's spend.</p></div>
+<div class="card"><h3>Any provider</h3><p class="small muted">Anthropic, OpenAI, Gemini, DeepSeek, Kimi and OpenRouter, in their own formats. Claude Code works with two settings.</p></div>
+<div class="card"><h3>Dashboards</h3><p class="small muted">Employees see their own budget. Managers see their team. Finance sees the whole company, and what was saved.</p></div>
+<div class="card"><h3>Fair billing</h3><p class="small muted">A request moved to a cheaper model because of a budget is never counted as savings, so you're never charged a fee on it.</p></div>
+</div>
+
+<h2>Pricing</h2>
+<p>${seatLine(config)}</p>
+<p class="small muted">Works with API-billed AI usage (for example Claude Code with an API key, or your own apps). Flat-fee seat subscriptions don't route through WasteZero.</p>
+<div class="row"><a class="btn" href="/signup">Set up Teams</a><a class="btn alt" href="/contact">Talk to us</a></div>`, { active: "/teams", desc: "Monthly AI budgets per employee, team pools, approval chains and automatic savings for Claude Code, Cursor and every AI tool." });
+}
 
 function pricing(config) {
   const pct = DEFAULT_POLICY.revenueSharePct;
@@ -17,6 +53,7 @@ function pricing(config) {
 <div class="card"><span class="tag">Free</span><h3 style="margin-top:8px">Waste audit</h3><p class="small muted">Upload a usage export or connect read-only usage data. See waste in dollars per month. No code change.</p><a class="btn sm" href="/audit">Run an audit</a></div>
 <div class="card"><span class="tag">Free</span><h3 style="margin-top:8px">Observe-only</h3><p class="small muted">Route traffic through WasteZero. Spend by feature, customer and model, runaway-spend protection and alerts, with no changes to your traffic.</p><a class="btn sm" href="/signup">Start</a></div>
 <div class="card"><span class="tag">${pct}% of verified savings</span><h3 style="margin-top:8px">Savings</h3><p class="small muted">Answer reuse, prompt caching, cheaper models after quality tests, cheapest provider for open models. Each saved request is listed in a statement you can check.</p></div>
+<div class="card"><span class="tag">For companies</span><h3 style="margin-top:8px">Teams: AI budgets per employee</h3><p class="small muted">Budgets by role, team pools, alerts, an approval chain and per-person keys for Claude Code and Cursor. ${seatLine(config)}</p><a class="btn sm" href="/teams">See Teams</a></div>
 </div>
 <h2>Questions</h2>
 <p><strong>How is a saving measured?</strong> For each request WasteZero changed: what it would have cost at the model and price you asked for, minus what it actually cost. Losses net against gains.</p>
@@ -117,7 +154,7 @@ ${contact(config) ? `<p>Questions: ${contact(config)}</p>` : ""}`);
 }
 
 export function handlePages(config, req, res, url) {
-  const render = { "/pricing": pricing, "/docs": docs, "/privacy": privacy, "/terms": terms }[url.pathname];
+  const render = { "/pricing": pricing, "/docs": docs, "/privacy": privacy, "/terms": terms, "/teams": teams }[url.pathname];
   if (!render || req.method !== "GET") return null;
   res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
   res.end(render(config));

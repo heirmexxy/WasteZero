@@ -38,6 +38,7 @@ export async function adminOverview(ctx) {
     outreachWaiting: ctx.prospects.list("drafted").length,
     operator: { halted: isHalted(ctx.config), intervalMs: ctx.config.operatorIntervalMs },
     escalations: audit, tenants: perTenant,
+    teams: (() => { const cos = tenants.filter((t) => t.org?.enabled); return { companies: cos.length, people: cos.reduce((n, t) => n + t.org.people.filter((p) => p.active !== false).length, 0), pendingRequests: cos.reduce((n, t) => n + t.org.exceptions.filter((x) => x.state === "pending").length, 0) }; })(),
     ownUse: internal ? (() => { const ev = thisMonth.filter((e) => e.tenantId === internal.id); const x = summarize(ev); return { requests: x.calls, spendUsd: x.actualCostUsd, savingsUsd: x.savingsUsd, blocked: ev.filter((e) => e.blocked).length }; })() : null
   };
 }
@@ -70,7 +71,7 @@ R.overview=async()=>{const o=await api("/overview");
  const a=$("#opr"),b=$("#oprun"),c=$("#opk");if(a)a.onclick=()=>act(()=>api("/operator/resume",{method:"POST"}),()=>tab("overview"));
  if(b)b.onclick=()=>act(async()=>{const r=await api("/operator/run",{method:"POST"});alert("Operator run: "+r.proposals.length+" proposals, "+r.actions.length+" actions, "+r.invoices.length+" invoices, "+r.escalations.length+" escalations")},()=>tab("overview"));
  if(c)c.onclick=()=>{if(confirm("Stop the autonomous operator? Live optimisations keep running."))act(()=>api("/operator/kill",{method:"POST"}),()=>tab("overview"))};
- view.innerHTML='<div class="grid4">'+[[o.customers,"customers ("+o.activeCustomers+" active this month)"],[o.payingCustomers,"with a card on file"],[usd(o.spendUsd),"AI spend through WasteZero this month"],[usd(o.savingsUsd),"saved for customers this month"],[usd(o.feesThisMonthUsd),"fees earned this month"],[usd(o.collectedUsd),"collected all time"],[usd(o.unpaidUsd),"invoiced, not yet paid"],[o.pendingApprovals+" / "+o.outreachWaiting,"changes pending / outreach to approve"]].concat(o.ownUse?[[usd(o.ownUse.spendUsd)+" / "+usd(o.ownUse.savingsUsd),"WasteZero's own AI: spent / saved this month"]]:[]).map(x=>'<div class="card"><div class="stat">'+x[0]+'</div><div class="small muted">'+x[1]+'</div></div>').join("")+'</div>'+
+ view.innerHTML='<div class="grid4">'+[[o.customers,"customers ("+o.activeCustomers+" active this month)"],[o.payingCustomers,"with a card on file"],[usd(o.spendUsd),"AI spend through WasteZero this month"],[usd(o.savingsUsd),"saved for customers this month"],[usd(o.feesThisMonthUsd),"fees earned this month"],[usd(o.collectedUsd),"collected all time"],[usd(o.unpaidUsd),"invoiced, not yet paid"],[o.pendingApprovals+" / "+o.outreachWaiting,"changes pending / outreach to approve"]].concat(o.ownUse?[[usd(o.ownUse.spendUsd)+" / "+usd(o.ownUse.savingsUsd),"WasteZero's own AI: spent / saved this month"]]:[]).concat(o.teams?[[o.teams.companies+" / "+o.teams.people,"Teams: companies / employees with budgets"]]:[]).map(x=>'<div class="card"><div class="stat">'+x[0]+'</div><div class="small muted">'+x[1]+'</div></div>').join("")+'</div>'+
  '<h2>Needs your attention</h2>'+table(o.escalations,[["When",e=>when(e.timestamp)],["What",e=>esc(e.message)]]);};
 R.team=async()=>{const t=await api("/team");const w=t.tasks.filter(x=>x.status==="needs_approval");$("#wait").innerHTML=w.length?'<span class="tag warn">'+w.length+'</span>':'';
  const g=t.goals;const f=t.facts;
