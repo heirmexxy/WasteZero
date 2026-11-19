@@ -21,6 +21,8 @@ import { Prospects, runProspecting, importDomains, draftEmail } from "./prospect
 import { handlePublic, PUBLIC_PATHS } from "./public.js";
 import { SpendMeter, LoopDetector, checkRequest, meterAndCheck } from "./guard.js";
 import { teamsGate, storedProviderKeys } from "./teams.js";
+import { shieldRequest } from "./shield.js";
+import { Breaker } from "./breaker.js";
 import { Settings, billingFor } from "./settings.js";
 import { TEAMS_PATHS, handleTeamsPages } from "./teams-http.js";
 import { ACCOUNT_PATHS, handleAccounts, isAdminSession, fromDashboard } from "./accounts.js";
@@ -122,7 +124,8 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
     loops: new LoopDetector(),
     cache: new ResponseCache({ maxEntries: config.cacheMaxEntries }),
     prefixes: new PrefixTracker(),
-    health: new ProviderHealth()
+    health: new ProviderHealth(),
+    breaker: new Breaker()
   };
   ctx.settings = new Settings(file("settings.json"), config);
   await ctx.tenants.init();
@@ -233,6 +236,7 @@ async function handle(ctx, req, res) {
   const found = ctx.tenants.lookup(customerApiKey(req));
   const tenant = found?.tenant || null;
   if (found?.key?.personId) req.wzPersonId = found.key.personId;
+  if (found?.key?.id) req.wzKeyId = found.key.id;
   // WasteZero for Teams: a company's stored provider keys, so employees' tools need only their WasteZero key.
   if (tenant?.org?.providerKeys && Object.keys(tenant.org.providerKeys).length) req.wzStoredKeys = storedProviderKeys(ctx.config, tenant);
   if (!tenant) {
@@ -381,6 +385,8 @@ async function handleChat(ctx, req, res, tenant) {
   }
   const teamBlock = teamsGate(ctx, tenant, req, body);
   if (teamBlock) return oaiError(res, teamBlock.status, teamBlock.code, teamBlock.message);
+  const shield = shieldRequest(ctx, tenant, req, body);
+  if (shield) return oaiError(res, shield.status, shield.code, shield.message);
 
   if (config.offers[body.model]) return handleOffer(ctx, req, res, tenant, body, receivedAt);
 
@@ -652,6 +658,8 @@ async function handleMessages(ctx, req, res, tenant) {
   }
   const teamBlock = teamsGate(ctx, tenant, req, body);
   if (teamBlock) return anthropicError(res, teamBlock.status, teamBlock.message);
+  const shield = shieldRequest(ctx, tenant, req, body);
+  if (shield) return anthropicError(res, shield.status, shield.message);
 
   const header = req.headers["x-wastezero-provider"];
   let { provider, error: providerError } = resolveProvider(config, { model: body.model, header });

@@ -36,12 +36,22 @@ export const DEFAULT_POLICY = Object.freeze({
 
   keepTestSamples: false,       // keep example answers from quality tests, to show side by side
   storeEndUserIds: false,       // keep the end-user ID as sent (otherwise a one-way hash)
-  planPrices: {}                // { "pro": 49 } monthly price per plan, for profit per customer
+  planPrices: {},               // { "pro": 49 } monthly price per plan, for profit per customer
+
+  // Circuit breaker: pause one runaway agent session (not the whole account).
+  breaker: { action: "pause", usdPer10Min: 25, repeatLimit: 8, pauseMinutes: 60 },   // action: pause | alert | off
+  // Firewall: secrets (keys, passwords, private keys) and personal data in prompts.
+  firewall: { secrets: "mask", pii: "monitor" },   // off | monitor | mask | block
+  marginAlertPct: 30,           // alert when an end customer's AI cost passes this % of their plan price
+  shareBenchmarks: true,        // contribute anonymous totals to cross-company benchmarks (min 5 companies)
+  seatPlans: null,              // null = WasteZero's default list of subscription seats to compare against
+  credits: []                   // prepaid provider credits: [{ id, provider, amountUsd, startAt, expiresAt }]
 });
 
 /** Fields a customer may change themselves through /v1/wastezero/settings. Commercial terms are not among them. */
 export const CUSTOMER_EDITABLE = ["allowedOptimizations", "autoShadow", "autoPromote", "minQuality", "cacheTags", "cacheNondeterministic",
-  "budgets", "budgetAction", "loopBreaker", "spikeAlert", "alertEmail", "alertWebhookUrl", "keepTestSamples", "storeEndUserIds", "planPrices"];
+  "budgets", "budgetAction", "loopBreaker", "spikeAlert", "alertEmail", "alertWebhookUrl", "keepTestSamples", "storeEndUserIds", "planPrices",
+  "breaker", "firewall", "marginAlertPct", "shareBenchmarks", "seatPlans", "credits"];
 
 const num = (v, min, max, name) => {
   if (!Number.isFinite(v) || v < min || v > max) throw new Error(`${name} must be between ${min} and ${max}`);
@@ -72,6 +82,25 @@ function normalizeSafety(policy, base) {
   for (const key of ["keepTestSamples", "storeEndUserIds"]) if (typeof policy[key] !== "boolean") throw new Error(`${key} must be true or false`);
   if (!policy.planPrices || typeof policy.planPrices !== "object" || Array.isArray(policy.planPrices)) throw new Error("planPrices must be an object of plan: monthly price");
   for (const [plan, price] of Object.entries(policy.planPrices)) { tagList([plan], "planPrices"); num(price, 0, 1e7, `planPrices.${plan}`); }
+  const br = { ...DEFAULT_POLICY.breaker, ...base.breaker, ...(policy.breaker || {}) };
+  policy.breaker = { action: oneOf(br.action, ["pause", "alert", "off"], "breaker.action"), usdPer10Min: num(br.usdPer10Min, 0.5, 1e6, "breaker.usdPer10Min"),
+    repeatLimit: num(br.repeatLimit, 3, 1000, "breaker.repeatLimit"), pauseMinutes: num(br.pauseMinutes, 5, 7 * 1440, "breaker.pauseMinutes") };
+  const fw = { ...DEFAULT_POLICY.firewall, ...base.firewall, ...(policy.firewall || {}) };
+  policy.firewall = { secrets: oneOf(fw.secrets, ["off", "monitor", "mask", "block"], "firewall.secrets"), pii: oneOf(fw.pii, ["off", "monitor", "mask", "block"], "firewall.pii") };
+  policy.marginAlertPct = num(policy.marginAlertPct ?? 30, 1, 1000, "marginAlertPct");
+  if (typeof policy.shareBenchmarks !== "boolean") throw new Error("shareBenchmarks must be true or false");
+  if (policy.seatPlans != null) {
+    if (!Array.isArray(policy.seatPlans) || policy.seatPlans.length > 20) throw new Error("seatPlans must be a list (up to 20)");
+    policy.seatPlans = policy.seatPlans.map((p, i) => ({ name: String(p.name || `Plan ${i + 1}`).slice(0, 60), provider: String(p.provider || "anthropic").slice(0, 24),
+      priceUsd: num(Number(p.priceUsd), 0, 1e5, `seatPlans[${i}].priceUsd`), coversUsd: num(Number(p.coversUsd), 0, 1e6, `seatPlans[${i}].coversUsd`) }));
+  }
+  if (!Array.isArray(policy.credits) || policy.credits.length > 50) throw new Error("credits must be a list (up to 50)");
+  policy.credits = policy.credits.map((c, i) => {
+    const startAt = new Date(c.startAt), expiresAt = new Date(c.expiresAt);
+    if (isNaN(startAt) || isNaN(expiresAt) || expiresAt <= startAt) throw new Error(`credits[${i}] needs a start date before its expiry date`);
+    return { id: String(c.id || `cr${i + 1}`).replace(/[^\w-]/g, "").slice(0, 24) || `cr${i + 1}`, provider: String(c.provider || "").toLowerCase().slice(0, 24),
+      amountUsd: num(Number(c.amountUsd), 1, 1e9, `credits[${i}].amountUsd`), startAt: startAt.toISOString(), expiresAt: expiresAt.toISOString(), note: String(c.note || "").slice(0, 120) };
+  });
 }
 
 const RANGES = {

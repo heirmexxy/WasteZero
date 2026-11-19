@@ -4,6 +4,7 @@ import { layout, sendHtml } from "./ui.js";
 import { escapeHtml, clientIp } from "./util.js";
 import { signToken } from "./tokens.js";
 import { note } from "./operator.js";
+import { resumeFromToken } from "./breaker.js";
 import {
   orgOf, teamsReport, importPeople, personByEmail, person, personBudget, requestException, decideException, approvalPlan,
   describeTerm, sealSecret, meLink, personFromToken, exceptionFromToken, isEmail, round
@@ -14,8 +15,9 @@ import {
 //   /me                an employee sees their budget, asks for more, gets their own key
 //   /teams/approve     a manager / exec / finance approves or declines from the link in their email
 
-export const TEAMS_PATHS = new Set(["/me", "/me/signin", "/me/request", "/me/key", "/teams/approve", "/app/teams.js"]);
+export const TEAMS_PATHS = new Set(["/me", "/me/signin", "/me/request", "/me/key", "/teams/approve", "/app/teams.js", "/app/insights.js", "/breaker/resume"]);
 const CLIENT_JS = readFileSync(fileURLToPath(new URL("./teams-client.js", import.meta.url)), "utf8");
+const INSIGHTS_JS = readFileSync(fileURLToPath(new URL("./insights-client.js", import.meta.url)), "utf8");
 
 const readForm = (req, max = 16384) => new Promise((resolve, reject) => {
   let raw = "";
@@ -242,6 +244,20 @@ ${canAct ? `<form method="post" action="/teams/approve" class="row"><input type=
 export async function handleTeamsPages(ctx, req, res, url) {
   const p = url.pathname, m = req.method;
   if (p === "/app/teams.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" }); return res.end(CLIENT_JS); }
+  if (p === "/app/insights.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" }); return res.end(INSIGHTS_JS); }
+
+  if (p === "/breaker/resume") {
+    const form = m === "POST" ? await readForm(req).catch(() => ({})) : {};
+    const token = m === "POST" ? form.token : url.searchParams.get("token");
+    const r = resumeFromToken(ctx, token);
+    if (!r) return sendHtml(res, 400, layout("Expired · WasteZero", `<h1>This link has expired</h1><p>The session resumes by itself when its pause ends, or the account owner can resume it in the dashboard (Security).</p>`));
+    if (m === "GET") return sendHtml(res, 200, layout("Resume AI session · WasteZero", `<div style="max-width:520px"><h1>Resume this AI session?</h1>
+<p>${escapeHtml(r.label)} was paused by the circuit breaker. Check what the agent was doing first (a loop, or a task bigger than expected).</p>
+<form method="post" action="/breaker/resume"><input type="hidden" name="token" value="${escapeHtml(token)}"><button class="btn" type="submit">Resume session</button></form></div>`));
+    ctx.breaker.resume(r.key);
+    await note(ctx, { actor: "breaker", action: "session_resumed", tenantId: r.tenantId, message: `${r.label} resumed from the email link` });
+    return sendHtml(res, 200, layout("Resumed · WasteZero", `<h1>Resumed</h1><p>${escapeHtml(r.label)} can run again. It gets 10 minutes before the spend limit applies again.</p>`));
+  }
 
   if (p === "/me/signin") {
     if (m === "GET") return sendHtml(res, 200, signinPage());

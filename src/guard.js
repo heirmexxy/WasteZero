@@ -1,4 +1,5 @@
 import { isPrivateAddress } from "./prospecting.js";
+import { breakerObserve } from "./breaker.js";
 import dns from "node:dns/promises";
 import { median } from "./util.js";
 import { forecastMonth } from "./economics.js";
@@ -143,6 +144,7 @@ export function meterAndCheck(ctx, event) {
   if (!tenant) return;
   spikeCheck(ctx, tenant, event);
   forecastCheck(ctx, tenant);
+  breakerObserve(ctx, tenant, event);
 }
 
 /** Warn early when this month is heading over the monthly budget (from day 3, once a month). */
@@ -188,6 +190,7 @@ export function alertOnce(ctx, tenant, key, message) {
   deliver(ctx, tenant, message).catch((e) => ctx.log.error("alert failed:", e.message));
 }
 
+export async function deliverAlert(ctx, tenant, message) { return deliver(ctx, tenant, message); }
 async function deliver(ctx, tenant, message) {
   const { note } = await import("./operator.js");
   await note(ctx, { level: "escalation", tenantId: tenant.id, action: "customer_alert", message: `${tenant.name}: ${message}` });

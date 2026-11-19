@@ -10,6 +10,7 @@ import { note } from "./operator.js";
 import { signToken } from "./tokens.js";
 import { isPeriod, median } from "./util.js";
 import { handleTeamsApi } from "./teams-http.js";
+import { handleInsightsApi } from "./insights-http.js";
 
 // Customer dashboard: /app (page) and /app/api/* (JSON, signed-in customer only).
 
@@ -76,6 +77,7 @@ export async function handleApp(ctx, req, res, url) {
   const api = p.slice("/app/api".length);
   const fresh = () => ctx.tenants.get(tenant.id);
   if (api === "/teams" || api.startsWith("/teams/")) return handleTeamsApi(ctx, req, res, fresh(), api, { json, readJson });
+  if (/^\/(security|insights)(\.csv|\/|$)/.test(api)) return handleInsightsApi(ctx, req, res, fresh(), api, url, { json, readJson });
 
   if (m === "GET" && api === "/overview") return json(res, 200, await overview(ctx, tenant));
   if (m === "GET" && api === "/waste") return json(res, 200, wasteReport({ events: await ctx.events.all(), tenant, config: ctx.config, rules: ctx.rules }));
