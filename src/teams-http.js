@@ -75,7 +75,7 @@ export async function handleTeamsApi(ctx, req, res, tenant, api, { json, readJso
       }
     } catch (e) { return json(res, 400, { error: e.message }); }
     await save();
-    await note(ctx, { actor: `customer:${tenant.id}`, action: "teams_settings", tenantId: tenant.id, message: `Teams settings changed: ${Object.keys(b).join(", ")}` });
+    await note(ctx, { actor: `customer:${tenant.id}`, action: "teams_settings", tenantId: tenant.id, message: `WasteZero for Teams settings changed: ${Object.keys(b).join(", ")}` });
     return json(res, 200, teamsReport(ctx, tenant));
   }
 

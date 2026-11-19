@@ -24,7 +24,7 @@ Built for the policies Salesforce, Coinbase and JPMorgan now use, so other compa
 
   Approvers decide from a link in their email. Extra budget expires and comes back up for review.
 - **Privacy mode** for works-council countries: managers see team totals only.
-- **Setup:** import staff by CSV (`email,name,role,team,manager_email,monthly_usd`), then manage everything in the dashboard's **Team budgets** tab.
+- **Setup:** import staff by CSV (`email,name,role,team,manager_email,monthly_usd`), then manage everything in the dashboard's **WasteZero for Teams** tab.
 - A request moved to a cheaper model because of a budget is never counted as savings, so it's never billed.
 - **Price:** $5 per employee who used AI that month, plus the usual savings share. Set it in the admin console under **Settings**. A change takes effect next month by default (with an optional email to Teams customers) or immediately. Each invoice uses the price for its own month.
 

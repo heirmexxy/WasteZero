@@ -1,4 +1,4 @@
-/* WasteZero for Teams: the "Team budgets" tab of the customer dashboard. Plain browser script. */
+/* WasteZero for Teams: the "WasteZero for Teams" tab of the customer dashboard. Plain browser script. */
 (function () {
   "use strict";
   window.WZTeams = async function (h) {
@@ -36,7 +36,7 @@
         ]);
       }
 
-      html += '<h2>Teams</h2>' + table(r.teams, [
+      html += '<h2>Your teams</h2>' + table(r.teams, [
         ["Team", (t) => esc(t.name) + '<div class="tiny muted">' + t.members + ' people' + (t.lead ? ' · lead ' + esc(t.lead) : '') + '</div>'],
         ["Spent", (t) => usd(t.spentUsd) + ' / ' + usd(t.budgetUsd) + bar(t.pct)],
         ["Over budget", (t) => (t.overBudgetMembers ? '<span class="tag warn">' + t.overBudgetMembers + '</span>' : '0')]

@@ -191,7 +191,7 @@ function appPage(ctx, tenant) {
 <div class="row" style="justify-content:space-between;margin:8px 0 0"><h1 style="margin:10px 0 0;font-size:28px" id="title">${tenant.name.replace(/[<>&"]/g, "")}</h1><span id="pausebox"></span></div>
 <div class="tabs" id="tabs">
 <button data-t="overview" class="on">Overview</button><button data-t="savings">Savings &amp; waste</button><button data-t="approvals">Approvals <span id="pendingCount"></span></button>
-<button data-t="profit">Profit per customer</button><button data-t="settings">Protection &amp; settings</button><button data-t="teams">Team budgets</button><button data-t="keys">API keys</button><button data-t="billing">Billing</button><button data-t="setup">Setup</button>
+<button data-t="profit">Profit per customer</button><button data-t="settings">Protection &amp; settings</button><button data-t="teams">WasteZero for Teams</button><button data-t="keys">API keys</button><button data-t="billing">Billing</button><button data-t="setup">Setup</button>
 </div>
 <div id="view"><p class="muted">Loading…</p></div><script src="/app/teams.js"></script>`, { nav: NAV, script: appScript(base) });
 }

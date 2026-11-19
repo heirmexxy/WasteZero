@@ -63,7 +63,7 @@ ${proof}
 <div class="card"><span class="tag">3</span><h3>Prove</h3><p class="muted small">Cheaper options are tested on your real requests. You see the scores side by side.</p></div>
 <div class="card"><span class="tag">4</span><h3>Save</h3><p class="muted small">Fixes go live with your approval, are watched continuously, and roll back on their own if quality slips.</p></div>
 </div>
-<div class="card" style="margin-top:28px"><span class="tag">New · WasteZero for Teams</span><h3 style="margin-top:8px">AI budgets for every employee</h3><p class="muted small">Monthly budgets by role, team pools, alerts to managers and an approval chain, like the ones Salesforce, Coinbase and JPMorgan now use. Your teams' Claude Code and Cursor usage goes through WasteZero, which keeps routine work on cheaper models.</p><a class="btn sm" href="/teams">See Teams</a></div>
+<div class="card" style="margin-top:28px"><span class="tag">WasteZero for Teams</span><h3 style="margin-top:8px">AI budgets for every employee</h3><p class="muted small">Monthly budgets by role, team pools, alerts to managers and an approval chain, like the ones Salesforce, Coinbase and JPMorgan now use. Your teams' Claude Code and Cursor usage goes through WasteZero, which keeps routine work on cheaper models.</p><a class="btn sm" href="/teams">See WasteZero for Teams</a></div>
 <h2>Pricing</h2>
 <p><strong>${pct}% of the savings we verify</strong> against your provider bill. Nothing if we save nothing. Every saved request is listed in a statement you can download and check.</p>
 <h2>Trust</h2>

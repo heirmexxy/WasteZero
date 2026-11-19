@@ -22,8 +22,8 @@ function teams(config) {
 <span class="tag">WasteZero for Teams</span>
 <h1 style="margin-top:10px">AI budgets for every employee, without slowing anyone down</h1>
 <p class="muted" style="font-size:18px;max-width:680px">Coding agents and AI assistants can cost thousands of dollars a month per person. Salesforce now gives every role a monthly token budget, Coinbase caps weekly AI spend by role and JPMorgan limits Claude Code per engineer. WasteZero gives your company the same controls on day one, and moves routine work to cheaper models automatically so people stay under budget.</p>
-<div class="row" style="margin:18px 0 8px"><a class="btn" href="/signup">Set up Teams</a><a class="btn alt" href="/signin">Already a customer? Sign in</a></div>
-<p class="small muted">Then open <strong>Team budgets</strong> in your dashboard.</p>
+<div class="row" style="margin:18px 0 8px"><a class="btn" href="/signup">Set up WasteZero for Teams</a><a class="btn alt" href="/signin">Already a customer? Sign in</a></div>
+<p class="small muted">Then open <strong>WasteZero for Teams</strong> in your dashboard.</p>
 
 <h2>How it works</h2>
 <div class="grid4">
@@ -46,7 +46,7 @@ function teams(config) {
 <h2>Pricing</h2>
 <p>${seatLine(config)}</p>
 <p class="small muted">Works with API-billed AI usage (for example Claude Code with an API key, or your own apps). Flat-fee seat subscriptions don't route through WasteZero.</p>
-<div class="row"><a class="btn" href="/signup">Set up Teams</a><a class="btn alt" href="/contact">Talk to us</a></div>`, { active: "/teams", desc: "Monthly AI budgets per employee, team pools, approval chains and automatic savings for Claude Code, Cursor and every AI tool." });
+<div class="row"><a class="btn" href="/signup">Set up WasteZero for Teams</a><a class="btn alt" href="/contact">Talk to us</a></div>`, { active: "/teams", desc: "Monthly AI budgets per employee, team pools, approval chains and automatic savings for Claude Code, Cursor and every AI tool." });
 }
 
 function pricing(config) {
@@ -58,7 +58,7 @@ function pricing(config) {
 <div class="card"><span class="tag">Free</span><h3 style="margin-top:8px">Waste audit</h3><p class="small muted">Upload a usage export or connect read-only usage data. See waste in dollars per month. No code change.</p><a class="btn sm" href="/audit">Run an audit</a></div>
 <div class="card"><span class="tag">Free</span><h3 style="margin-top:8px">Observe-only</h3><p class="small muted">Route traffic through WasteZero. Spend by feature, customer and model, runaway-spend protection and alerts, with no changes to your traffic.</p><a class="btn sm" href="/signup">Start</a></div>
 <div class="card"><span class="tag">${pct}% of verified savings</span><h3 style="margin-top:8px">Savings</h3><p class="small muted">Answer reuse, prompt caching, cheaper models after quality tests, cheapest provider for open models. Each saved request is listed in a statement you can check.</p></div>
-<div class="card"><span class="tag">For companies</span><h3 style="margin-top:8px">Teams: AI budgets per employee</h3><p class="small muted">Budgets by role, team pools, alerts, an approval chain and per-person keys for Claude Code and Cursor. ${seatLine(config)}</p><a class="btn sm" href="/teams">See Teams</a></div>
+<div class="card"><span class="tag">For companies</span><h3 style="margin-top:8px">WasteZero for Teams: AI budgets per employee</h3><p class="small muted">Budgets by role, team pools, alerts, an approval chain and per-person keys for Claude Code and Cursor. ${seatLine(config)}</p><a class="btn sm" href="/teams">See WasteZero for Teams</a></div>
 </div>
 <h2>Questions</h2>
 <p><strong>How is a saving measured?</strong> For each request WasteZero changed: what it would have cost at the model and price you asked for, minus what it actually cost. Losses net against gains.</p>

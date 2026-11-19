@@ -867,7 +867,7 @@ async function handleAdmin(ctx, req, res, url) {
     if (!("teamsSeatUsd" in b)) throw httpError(400, "Nothing to change: send teamsSeatUsd");
     let entry;
     try { entry = await ctx.settings.setSeatPrice(b.teamsSeatUsd, { when: b.when || "next_month" }); } catch (e) { throw httpError(400, e.message); }
-    await note(ctx, { actor: "admin", action: "teams_seat_price", message: `Teams seat price set to $${entry.usd} per active employee/month from ${entry.effectiveFrom} (was $${entry.from})` });
+    await note(ctx, { actor: "admin", action: "teams_seat_price", message: `WasteZero for Teams seat price set to $${entry.usd} per active employee/month from ${entry.effectiveFrom} (was $${entry.from})` });
     // Tell companies using Teams before a change reaches their invoice (only when asked).
     let notified = 0;
     if (b.notifyCustomers && entry.usd !== entry.from) {

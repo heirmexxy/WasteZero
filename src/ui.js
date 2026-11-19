@@ -48,7 +48,7 @@ th{font-weight:600;color:var(--muted);font-size:13px}
 @media(max-width:600px){.side{grid-template-columns:1fr}header.top nav{gap:12px;font-size:14px;margin-left:0;width:100%}}`;
 
 const NAV = [
-  ["/", "Home"], ["/audit", "Free audit"], ["/teams", "Teams"], ["/pricing", "Pricing"], ["/docs", "Docs"]
+  ["/", "Home"], ["/audit", "Free audit"], ["/teams", "WasteZero for Teams"], ["/pricing", "Pricing"], ["/docs", "Docs"]
 ];
 
 /** Full HTML page with the shared header. `nav` can override the links (dashboards use their own). */
@@ -65,7 +65,7 @@ export function layout(title, body, { desc = "", active = "", nav = null, script
 <body><header class="top"><div class="in"><a class="brand" href="/"><img src="/brand/wastezero-logo.svg" alt="WasteZero" height="28" style="display:block;height:28px;width:auto"></a><nav>${links}</nav></div></header>
 <main>${body}</main>
 <footer style="border-top:1px solid var(--line);margin-top:40px"><div style="max-width:960px;margin:0 auto;padding:18px 20px;font-size:13px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap">
-<span>© WasteZero</span><a href="/contact">Contact</a><a href="/teams">Teams</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/signin">Sign in</a></div></footer>
+<span>© WasteZero</span><a href="/contact">Contact</a><a href="/teams">WasteZero for Teams</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/signin">Sign in</a></div></footer>
 ${script ? `<script>${script}</script>` : ""}</body></html>`;
 }
 
