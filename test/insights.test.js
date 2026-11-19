@@ -201,3 +201,15 @@ test("deferred requests go through OpenAI and Anthropic batch services at half p
   assert.ok(batch.deferredSavedUsd > 0);
   await s.close();
 });
+
+test("Security and Insights tabs: scripts are valid and the dashboard links them", async () => {
+  const vm = await import("node:vm");
+  const s = await company();
+  const js = await (await fetch(s.base + "/app/insights.js")).text();
+  assert.doesNotThrow(() => new vm.Script(js));
+  const page = await (await fetch(s.base + "/app", { headers: { cookie: s.cookie } })).text();
+  assert.match(page, /data-t="security">Security/); assert.match(page, /data-t="insights">Insights/);
+  assert.equal((await s.api("GET", "/security")).status, 200);
+  assert.equal((await s.api("GET", "/insights")).status, 200);
+  await s.close();
+});

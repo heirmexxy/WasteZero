@@ -193,9 +193,9 @@ function appPage(ctx, tenant) {
 <div class="row" style="justify-content:space-between;margin:8px 0 0"><h1 style="margin:10px 0 0;font-size:28px" id="title">${tenant.name.replace(/[<>&"]/g, "")}</h1><span id="pausebox"></span></div>
 <div class="tabs" id="tabs">
 <button data-t="overview" class="on">Overview</button><button data-t="savings">Savings &amp; waste</button><button data-t="approvals">Approvals <span id="pendingCount"></span></button>
-<button data-t="profit">Profit per customer</button><button data-t="settings">Protection &amp; settings</button><button data-t="teams">WasteZero for Teams</button><button data-t="keys">API keys</button><button data-t="billing">Billing</button><button data-t="setup">Setup</button>
+<button data-t="profit">Profit per customer</button><button data-t="settings">Protection &amp; settings</button><button data-t="teams">WasteZero for Teams</button><button data-t="security">Security</button><button data-t="insights">Insights</button><button data-t="keys">API keys</button><button data-t="billing">Billing</button><button data-t="setup">Setup</button>
 </div>
-<div id="view"><p class="muted">Loading…</p></div><script src="/app/teams.js"></script>`, { nav: NAV, script: appScript(base) });
+<div id="view"><p class="muted">Loading…</p></div><script src="/app/teams.js"></script><script src="/app/insights.js"></script>`, { nav: NAV, script: appScript(base) });
 }
 
 function appScript(base) {
@@ -219,6 +219,8 @@ async function pausebox(o){$("#pausebox").innerHTML=o.paused?'<span class="tag b
  $("#pendingCount").innerHTML=o.pendingApprovals?'<span class="tag warn">'+o.pendingApprovals+'</span>':"";}
 const R={};
 R.teams=()=>window.WZTeams({view,api,esc,usd,table,when});
+R.security=()=>window.WZSecurity({view,api,esc,table,when});
+R.insights=()=>window.WZInsights({view,api,esc,table,when});
 R.overview=async()=>{const o=await api("/overview");pausebox(o);
  const first=o.firstRequestAt?'<span class="tag">Receiving traffic</span> <span class="small muted">last request '+when(o.lastRequestAt)+'</span>':'<div class="notice"><strong>Waiting for your first request…</strong> Follow the <a href="#setup" onclick="tab(\\'setup\\');return false">setup</a> steps; this updates by itself.</div>';
  const f=o.forecast;const cap=o.budgets.monthlyUsd;

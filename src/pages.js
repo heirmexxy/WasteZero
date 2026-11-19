@@ -107,10 +107,24 @@ except (openai.APIConnectionError, openai.APITimeoutError):
 <tr><td><code>X-WasteZero-User</code></td><td>Your end user: per-user budgets and profit per customer</td></tr>
 <tr><td><code>X-WasteZero-Plan</code></td><td>That user's plan (for example <code>pro</code>): profit per plan</td></tr>
 <tr><td><code>X-WasteZero-Provider</code></td><td>Choose the provider yourself</td></tr>
+<tr><td><code>X-WasteZero-Session</code></td><td>Name an agent run, so the circuit breaker can pause just that run (Claude Code's own session id is picked up automatically)</td></tr>
+<tr><td><code>X-WasteZero-Callback</code></td><td>Deferred requests only: an HTTPS address that receives the result</td></tr>
 </table>
 <p class="small muted" style="margin-top:12px">Every answer carries <code>X-WasteZero-Overhead-Ms</code>, the delay WasteZero added.</p>
+<h2 id="deferred">Work that can wait: half price</h2>
+<p>Evaluations, reports, backfills and bulk jobs don't need an answer in seconds. Send them to the deferred endpoints and WasteZero runs them through the provider's batch service (Anthropic and OpenAI) at about half the price. Results usually come back within minutes, and always within 24 hours.</p>
+<pre>curl ${base}/v1/deferred/chat/completions \
+  -H "Authorization: Bearer wz_..." -H "Content-Type: application/json" \
+  -H "X-WasteZero-Callback: https://your-app.com/hooks/ai" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Summarise this report: ..."}]}'
+# → 202 {"id":"dj_...","status":"queued"}
+curl ${base}/v1/deferred/dj_... -H "Authorization: Bearer wz_..."
+# → {"status":"completed","result":{...the normal response...}}</pre>
+<p class="small muted">For Claude, use <code>/v1/deferred/messages</code> with a Messages API body. Streaming isn't available for deferred requests.</p>
+<h2>Safety built in</h2>
+<p><strong>Circuit breaker:</strong> an agent session that loops on the same failing step, or spends too fast, is paused on its own while the rest of your account keeps working. You get an alert with a resume link. <strong>Firewall:</strong> API keys, passwords, private keys and personal data in prompts are logged, masked or blocked before they reach the provider, as you choose. Both are set under <em>Security</em> in the dashboard.</p>
 <h2>Your dashboard</h2>
-<p>Everything else (settings, budgets, approvals, keys, invoices) is in the <a href="/signin">dashboard</a>.</p>`, { active: "/docs" });
+<p>Everything else (settings, budgets, approvals, keys, invoices, Security and Insights) is in the <a href="/signin">dashboard</a>.</p>`, { active: "/docs" });
 }
 
 function privacy(config) {
@@ -135,6 +149,10 @@ function privacy(config) {
 <p>Request records are kept for as long as you have an account, so savings can be checked against invoices. To delete your account and data, email ${contact(config) || "us"}.</p>
 <h2>Sharing</h2>
 <p>We share data only with the services needed to run WasteZero: your chosen AI providers, our payment provider and our email provider. We don't sell data.</p>
+<h2>Benchmarks</h2>
+<p>To show how your AI spending compares with similar companies, we compare a few monthly totals across customers: spend per active employee, share of spend on top-tier models, share of input served from cache, savings rate, cost per request and cost per merged pull request. Never prompts, answers, names or anything about a single person. A comparison is shown only when at least five companies take part, so no single company can be picked out. You can stop taking part at any time in the dashboard (Insights).</p>
+<h2>Secrets and personal data in prompts</h2>
+<p>If you switch on the firewall, prompts are checked for secrets and personal data before they're sent to your AI provider. We record only the type and number of findings, never the values themselves.</p>
 ${contact(config) ? `<p>Questions: ${contact(config)}</p>` : ""}`);
 }
 

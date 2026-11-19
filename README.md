@@ -8,6 +8,17 @@ find customers → sign up (observe-only) → measure spend → find waste → t
       → go live if quality holds → watch quality, roll back if it slips → invoice % of savings → charge card
 ```
 
+## Moat features
+
+- **Circuit breaker.** Pauses one runaway agent session (a loop on the same failing step, or spend over $X in 10 minutes) while the rest of the account keeps working. It alerts the engineer and manager, offers a resume link, and recognises Claude Code sessions automatically. Settings live in Dashboard → Security.
+- **Secrets & personal-data firewall.** Detects API keys, private keys, passwords, connection strings, emails, phones, card numbers and IDs in prompts, then logs, masks or blocks them per company. Only types and counts are stored. A compliance report and CSV are included.
+- **ROI ledger.** Connect GitHub and Jira (read-only, encrypted) to see AI spend per merged PR and per ticket done, by person and team. Budget requests come with the ROI numbers filled in.
+- **Seats or pay-per-use.** Per-person advice on whether a subscription seat would cost less, and flags people who pay twice. The plan list is editable.
+- **Prepaid credits.** Forecasts how much committed credit will expire unused, alerts early, and prefers that provider's offers while the credit is at risk.
+- **Deferred (batch) API.** `/v1/deferred/chat/completions` and `/v1/deferred/messages` run through Anthropic and OpenAI batch services at about half price, with polling or a callback. The discount is recorded as savings.
+- **Margins.** AI cost per end customer and per feature, with alerts when a customer passes X% of their plan price.
+- **Benchmarks.** Anonymous comparisons with peer companies, shown only with at least 5 companies, and customers can opt out.
+
 ## WasteZero for Teams: AI budgets for every employee
 
 Built for the policies Salesforce, Coinbase and JPMorgan now use, so other companies get them on day one.

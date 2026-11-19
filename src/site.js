@@ -53,8 +53,11 @@ ${proof}
 <h2>Sound familiar?</h2>
 <div class="grid">
 <div class="card"><h3>"Our AI bill doubled and nobody can explain why."</h3><p class="muted small">See cost by feature, customer and model, on every request.</p></div>
-<div class="card"><h3>"An agent looped overnight and cost us thousands."</h3><p class="muted small">Budget caps, a loop breaker and spike alerts stop it within minutes, not at month end.</p></div>
+<div class="card"><h3>"An agent looped overnight and cost us thousands."</h3><p class="muted small">The circuit breaker pauses just that session within minutes, and alerts the engineer and their manager with a resume link.</p></div>
 <div class="card"><h3>"We pay top-model prices for simple work."</h3><p class="muted small">Repeated answers are reused. Simple tasks move to cheaper models, but only after quality tests pass.</p></div>
+<div class="card"><h3>"Security won't let us roll out AI."</h3><p class="muted small">API keys, passwords and personal data are masked or blocked before any prompt leaves, with a compliance report for your auditors.</p></div>
+<div class="card"><h3>"What did $300k of tokens actually buy?"</h3><p class="muted small">AI spend against merged pull requests and tickets done, per person and team, from GitHub and Jira.</p></div>
+<div class="card"><h3>"Is our spend even normal?"</h3><p class="muted small">Benchmarks against similar companies, plus seat-or-pay-per-use advice, prepaid credit forecasts and half-price batch for work that can wait.</p></div>
 </div>
 <h2>How it works</h2>
 <div class="grid4">
