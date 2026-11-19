@@ -34,7 +34,7 @@ export class ProviderHealth {
 const blended = (rate) => rate.input * 0.75 + rate.output * 0.25;   // typical traffic is input-heavy
 
 /** Offers in the order to try them: healthy and cheapest first; only ones we hold a key for. */
-export function rankOffers(config, alias, { customerKeys = {}, health }) {
+export function rankOffers(config, alias, { customerKeys = {}, health, prefer = null }) {
   const list = config.offers[alias] || [];
   const ranked = list.map((o, i) => {
     const provider = config.providers[o.provider];
@@ -43,7 +43,9 @@ export function rankOffers(config, alias, { customerKeys = {}, health }) {
     const rate = resolveRate(o.model, config.modelRates)?.rate;
     return { ...o, provider, key, keySource: own ? "customer" : "wastezero", reference: i === 0, price: rate ? blended(rate) : Infinity, healthy: health.healthy(o.provider) };
   }).filter((o) => o.key);
-  return ranked.sort((a, b) => (b.healthy - a.healthy) || (a.price - b.price));
+  // Providers holding prepaid credit that would otherwise expire unused come first among healthy offers.
+  const pref = (o) => (prefer?.has(o.provider.name) ? 1 : 0);
+  return ranked.sort((a, b) => (b.healthy - a.healthy) || (pref(b) - pref(a)) || (a.price - b.price));
 }
 
 /** X-Upstream-Keys: {"groq":"gsk_...","together":"..."}: the customer's own keys per provider. */

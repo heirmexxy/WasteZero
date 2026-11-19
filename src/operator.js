@@ -1,5 +1,9 @@
 import { existsSync } from "node:fs";
 import { sweepTeams } from "./teams.js";
+import { syncAllRoi } from "./roi.js";
+import { creditsCheck, creditBias } from "./credits.js";
+import { marginCheck } from "./economics.js";
+import { submitDeferred, pollDeferred, pruneDeferred } from "./deferred.js";
 import { billingFor } from "./settings.js";
 import path from "node:path";
 import { analyze } from "./analyzer.js";
@@ -149,6 +153,18 @@ export async function runOperator(ctx, { now = new Date() } = {}) {
 
   // 5b. WasteZero for Teams: end extra budgets that have expired, and ask for a review.
   try { const n = await sweepTeams(ctx, now); if (n) report.teams = { expired: n }; } catch (error) { ctx.log.error("teams sweep failed:", error.message); }
+  try { const n = await syncAllRoi(ctx, now); if (n) report.roi = { synced: n }; } catch (error) { ctx.log.error("ROI sync failed:", error.message); }
+  // Prepaid credit at risk, customers' own margins, and the deferred (batch) queue.
+  try {
+    const events = await ctx.events.all();
+    ctx.creditBias = new Map();
+    for (const t of ctx.tenants.listCustomers()) {
+      if (t.policy.credits?.length) { creditsCheck(ctx, t, events, now); ctx.creditBias.set(t.id, creditBias(t, events, now)); }
+      await marginCheck(ctx, t, events, now);
+    }
+    report.deferred = { submitted: await submitDeferred(ctx), completed: await pollDeferred(ctx) };
+    await pruneDeferred(ctx);
+  } catch (error) { ctx.log.error("credit/margin/deferred checks failed:", error.message); }
 
   // 6. The rest of the team: Chief of Staff, Prospector, Onboarding, Reliability.
   const before = report.escalations.length;

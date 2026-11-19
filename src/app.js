@@ -22,6 +22,8 @@ import { handlePublic, PUBLIC_PATHS } from "./public.js";
 import { SpendMeter, LoopDetector, checkRequest, meterAndCheck } from "./guard.js";
 import { teamsGate, storedProviderKeys } from "./teams.js";
 import { shieldRequest } from "./shield.js";
+import { firewall, firewallRecord } from "./firewall.js";
+import { DeferredJobs, enqueue, publicJob, submitDeferred, pollDeferred, pruneDeferred } from "./deferred.js";
 import { Breaker } from "./breaker.js";
 import { Settings, billingFor } from "./settings.js";
 import { TEAMS_PATHS, handleTeamsPages } from "./teams-http.js";
@@ -125,7 +127,8 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
     cache: new ResponseCache({ maxEntries: config.cacheMaxEntries }),
     prefixes: new PrefixTracker(),
     health: new ProviderHealth(),
-    breaker: new Breaker()
+    breaker: new Breaker(),
+    deferred: new DeferredJobs(file("deferred.json"))
   };
   ctx.settings = new Settings(file("settings.json"), config);
   await ctx.tenants.init();
@@ -133,6 +136,7 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
   await ctx.prospects.init();
   await ctx.company.init();
   await ctx.settings.init();
+  await ctx.deferred.init();
   // WasteZero's own account: its agents and grader call AI through WasteZero itself.
   const perAgent = Object.fromEntries(["agent-chief_of_staff", "agent-inbox", "agent-prospector", "agent-onboarding"].map((t) => [t, Math.max(0.5, config.agents.dailyBudgetUsd / 4)]));
   ctx.internalKey = (await ctx.tenants.ensureInternal({ dailyBudgetUsd: config.agents.dailyBudgetUsd, perAgentDailyUsd: perAgent })).apiKey;
@@ -179,7 +183,8 @@ export async function createApp(config, { fetch: fetchImpl = globalThis.fetch, l
     });
   });
   return { server, ctx, runOperator: (opts) => runOperator(ctx, opts), setupTelegram: () => setupTelegramWebhook(ctx),
-    runReliability: () => reliability(ctx), runAgents: (opts = {}) => runAgents(ctx, { agents: {}, escalations: [] }, opts) };
+    runReliability: () => reliability(ctx), runAgents: (opts = {}) => runAgents(ctx, { agents: {}, escalations: [] }, opts),
+    runDeferred: async () => ({ submitted: await submitDeferred(ctx), completed: await pollDeferred(ctx), pruned: await pruneDeferred(ctx) }) };
 }
 
 async function handle(ctx, req, res) {
@@ -246,6 +251,12 @@ async function handle(ctx, req, res) {
   if (req.method === "POST" && p === "/v1/messages") return handleMessages(ctx, req, res, tenant);
 
   if (req.method === "POST" && p === "/v1/chat/completions") return handleChat(ctx, req, res, tenant);
+  if (req.method === "POST" && (p === "/v1/deferred/chat/completions" || p === "/v1/deferred/messages")) return handleDeferred(ctx, req, res, tenant, p.endsWith("/messages") ? "anthropic" : "openai");
+  if (req.method === "GET" && /^\/v1\/deferred\/dj_[a-f0-9]+$/.test(p)) {
+    const job = ctx.deferred.get(p.split("/").pop());
+    if (!job || job.tenantId !== tenant.id) return send(res, 404, { error: { message: "No such deferred job", type: "not_found" } });
+    return send(res, 200, publicJob(job));
+  }
   if (req.method === "GET" && (p === "/v1/models" || p.startsWith("/v1/models/"))) return passThroughGet(ctx, req, res, p.slice(3));
   if (p.startsWith("/v1/wastezero/")) return handleCustomer(ctx, req, res, url, tenant);
   return oaiError(res, 404, "unsupported_endpoint", `WasteZero does not support ${req.method} ${p} yet. Supported: POST /v1/chat/completions, GET /v1/models.`);
@@ -371,6 +382,29 @@ function keepRoutingOnProvider(ctx, decision, provider, req) {
   return decision;
 }
 
+/** Work that can wait: queued for the provider's batch service at about half price. */
+async function handleDeferred(ctx, req, res, tenant, format) {
+  const err = (status, message) => (format === "anthropic" ? anthropicError(res, status, message) : oaiError(res, status, "invalid_request", message));
+  let body;
+  try { body = await readJson(req, ctx.config.maxBodyBytes); } catch (error) { return err(error.status || 400, error.message); }
+  if (!body || typeof body.model !== "string" || !Array.isArray(body.messages)) return err(400, "Expected a JSON body with model and messages");
+  if (body.stream) return err(400, "Deferred requests can't stream; drop \"stream\"");
+  if (format === "anthropic" && !Number.isFinite(body.max_tokens)) return err(400, "max_tokens is required");
+  const { provider, error } = resolveProvider(ctx.config, { model: body.model, header: req.headers["x-wastezero-provider"] });
+  if (error) return err(400, error);
+  if (format === "anthropic" && provider.format !== "anthropic") return err(400, `${body.model} is not an Anthropic model: use /v1/deferred/chat/completions`);
+  const teamBlock = teamsGate(ctx, tenant, req, body);
+  if (teamBlock) return err(teamBlock.status, teamBlock.message);
+  const fw = firewall(body, tenant.policy);
+  if (fw.block) return err(403, `WasteZero blocked this request: it contains ${fw.block === "secrets" ? "secrets" : "personal data"}.`);
+  const callback = String(req.headers["x-wastezero-callback"] || "");
+  if (callback && !/^https:\/\//.test(callback)) return err(400, "X-WasteZero-Callback must be an https URL");
+  const keyHeader = String(req.headers["x-upstream-authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  const job = await enqueue(ctx, { tenant, provider, format, body, keyHeader: keyHeader || null, callbackUrl: callback || null, tag: req.headers["x-wastezero-tag"] || null,
+    extra: { ...(req.wzTeam || {}), firewall: firewallRecord(fw, tenant.policy) } });
+  return send(res, 202, publicJob(job));
+}
+
 async function handleChat(ctx, req, res, tenant) {
   const { config } = ctx;
   const receivedAt = Date.now();
@@ -482,7 +516,7 @@ async function handleChat(ctx, req, res, tenant) {
  */
 async function handleOffer(ctx, req, res, tenant, body, receivedAt) {
   const { config } = ctx;
-  const offers = rankOffers(config, body.model, { customerKeys: customerKeysFrom(req), health: ctx.health });
+  const offers = rankOffers(config, body.model, { customerKeys: customerKeysFrom(req), health: ctx.health, prefer: ctx.creditBias?.get(tenant.id) });
   if (!offers.length) return oaiError(res, 503, "no_provider_key", `No key for any provider of ${body.model}: send X-Upstream-Keys with your keys, e.g. {"groq":"gsk_..."}`);
   const tag = sanitizeTag(req.headers["x-wastezero-tag"]);
   const rawUser = req.headers["x-wastezero-user"] || (typeof body.user === "string" ? body.user : "");

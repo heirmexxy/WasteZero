@@ -23,6 +23,8 @@ app.server.listen(config.port, config.host, () => {
 });
 if (config.agents.enabled && config.agents.reliabilityIntervalMs > 0) {
   setInterval(() => app.runReliability().catch((e) => console.error("reliability check failed:", e.message)), config.agents.reliabilityIntervalMs).unref();
+  // Deferred (batch) requests: submit and collect every 2 minutes.
+  setInterval(() => app.runDeferred().catch((e) => console.error("deferred jobs failed:", e.message)), 120_000).unref();
 }
 if (config.telegram.botToken) {
   app.setupTelegram().then((ok) => console.log(ok ? "Telegram webhook registered" : "Telegram webhook not registered (needs an https PUBLIC_BASE_URL)"));

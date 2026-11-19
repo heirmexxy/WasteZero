@@ -79,6 +79,8 @@ export function loadConfig(env = process.env) {
   config.operatorName = env.OPERATOR_NAME || "";
   config.contactEmail = env.CONTACT_EMAIL || "";
 
+  config.roi = { jiraHostPattern: env.JIRA_HOST_PATTERN || "" };
+
   // Card billing.
   config.billing = {
     provider: env.PAYMENT_PROVIDER || "none",

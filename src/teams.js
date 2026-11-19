@@ -296,7 +296,7 @@ export function importPeople(o, csv, { deactivateMissing = false } = {}) {
   const split = (l) => { const out = []; let cur = "", q = false; for (const ch of l) { if (ch === '"') q = !q; else if (ch === "," && !q) { out.push(cur.trim()); cur = ""; } else cur += ch; } out.push(cur.trim()); return out; };
   const head = split(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z_]/g, ""));
   const col = (name, ...alts) => [name, ...alts].map((n) => head.indexOf(n)).find((i) => i >= 0) ?? -1;
-  const ci = { email: col("email"), name: col("name"), role: col("role"), team: col("team"), manager: col("manager_email", "manageremail", "manager"), usd: col("monthly_usd", "monthlyusd", "budget") };
+  const ci = { email: col("email"), name: col("name"), role: col("role"), team: col("team"), manager: col("manager_email", "manageremail", "manager"), usd: col("monthly_usd", "monthlyusd", "budget"), github: col("github", "github_login", "githublogin"), seat: col("seat", "subscription") };
   if (ci.email < 0) throw new Error("The header needs an email column");
   if (lines.length - 1 > 5000) throw new Error("At most 5,000 people per import");
   const result = { added: 0, updated: 0, deactivated: 0, errors: [] };
@@ -325,6 +325,8 @@ export function importPeople(o, csv, { deactivateMissing = false } = {}) {
       const v = Number(String(c[ci.usd]).replace(/[$,]/g, ""));
       if (Number.isFinite(v) && v >= 0) p.monthlyUsd = v; else result.errors.push(`Row ${i + 2}: monthly_usd "${c[ci.usd]}" is not a number`);
     }
+    if (ci.github >= 0 && c[ci.github]) p.githubLogin = c[ci.github].replace(/^@/, "").replace(/[^\w-]/g, "").slice(0, 39).toLowerCase();
+    if (ci.seat >= 0) p.seat = (c[ci.seat] || "").slice(0, 60) || undefined;
     if (ci.manager >= 0) managers.push([p, (c[ci.manager] || "").toLowerCase()]);
   });
   for (const [p, mEmail] of managers) {

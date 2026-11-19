@@ -5,6 +5,7 @@ import { escapeHtml, clientIp } from "./util.js";
 import { signToken } from "./tokens.js";
 import { note } from "./operator.js";
 import { resumeFromToken } from "./breaker.js";
+import { roiNote } from "./roi.js";
 import {
   orgOf, teamsReport, importPeople, personByEmail, person, personBudget, requestException, decideException, approvalPlan,
   describeTerm, sealSecret, meLink, personFromToken, exceptionFromToken, isEmail, round
@@ -175,7 +176,7 @@ async function invite(ctx, tenant, p) {
 
 // ------------------------------------------------------------ employee and approver pages
 
-function mePage(ctx, tenant, p, token, { message = "", error = "", apiKey = "" } = {}) {
+function mePage(ctx, tenant, p, token, { message = "", error = "", apiKey = "", roiPrefill = "" } = {}) {
   const o = orgOf(tenant);
   const b = personBudget(o, p);
   const used = round(ctx.meter.month(tenant.id).person(p.id));
@@ -209,7 +210,7 @@ ${setup}
 <p class="small muted">Up to ${usd(plan20)} more this month: your manager's manager approves. Up to ${usd(b.base * 2)} more for 90 days: one level higher, with an ROI note. More than that: an executive and finance.</p>
 <label>Extra dollars per month</label><input name="amountUsd" type="number" min="1" step="1" required>
 <label>What it's for</label><textarea name="reason" rows="2" required maxlength="1000"></textarea>
-<label>ROI (needed above ${usd(plan20)}): what will it produce, and why is it worth it?</label><textarea name="roi" rows="3" maxlength="1500"></textarea>
+<label>ROI (needed above ${usd(plan20)}): what will it produce, and why is it worth it?</label><textarea name="roi" rows="4" maxlength="1500">${escapeHtml(roiPrefill)}</textarea>
 <button class="btn" type="submit" style="margin-top:12px">Send request</button></form>
 ${mine.length ? `<h3>Your requests</h3><table><tr><th>Amount</th><th>Status</th><th>Term</th></tr>${mine.map((x) => `<tr><td>${usd(x.amountUsd)}</td><td><span class="tag ${x.state === "approved" ? "" : x.state === "pending" ? "warn" : "grey"}">${escapeHtml(x.state)}</span></td><td class="small">${escapeHtml(describeTerm(x))}${x.expiresAt ? ` · until ${x.expiresAt.slice(0, 10)}` : ""}</td></tr>`).join("")}</table>` : ""}
 <p class="small muted" style="margin-top:20px">Tip: match the model to the task. Smaller models handle drafting, summaries and simple edits well, and leave more budget for hard problems.</p>
@@ -279,7 +280,8 @@ export async function handleTeamsPages(ctx, req, res, url) {
     const token = url.searchParams.get("token") || "";
     const who = personFromToken(ctx, token);
     if (!who) return sendHtml(res, 400, signinPage("", "That link has expired. Ask for a new one."));
-    return sendHtml(res, 200, mePage(ctx, who.tenant, who.person, token));
+    const roiPrefill = roiNote(who.tenant, await ctx.events.all(), who.person);
+    return sendHtml(res, 200, mePage(ctx, who.tenant, who.person, token, { roiPrefill }));
   }
 
   if ((p === "/me/request" || p === "/me/key") && m === "POST") {
@@ -293,7 +295,8 @@ export async function handleTeamsPages(ctx, req, res, url) {
       return sendHtml(res, 200, mePage(ctx, who.tenant, who.person, form.token, { apiKey }));
     }
     try {
-      const x = await requestException(ctx, who.tenant, who.person, { amountUsd: form.amountUsd, reason: form.reason, roi: form.roi });
+      const roiText = String(form.roi || "").trim();
+      const x = await requestException(ctx, who.tenant, who.person, { amountUsd: form.amountUsd, reason: form.reason, roi: /produce:$/.test(roiText) ? "" : roiText });
       return sendHtml(res, 200, mePage(ctx, who.tenant, who.person, form.token, { message: `Request sent to: ${x.groups.map((g) => g.name).join(" and ")}. You'll get an email when it's decided.` }));
     } catch (e) { return sendHtml(res, 400, mePage(ctx, who.tenant, who.person, form.token, { error: e.message })); }
   }
